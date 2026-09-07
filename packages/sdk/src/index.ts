@@ -6,3 +6,7 @@
 export * from './pay/types';
 export * from './pay/client';
 export * from './pay/hedera';
+export * from './delegate/wire';
+export * from './delegate/authority';
+export * from './delegate/server';
+export * from './delegate/client';

@@ -34,16 +34,9 @@ export type Env = {
   UPSTREAM_URL?: string;
 };
 
-const encoder = new TextEncoder();
-
-export const deriveRootKey = async (secret: string, root: string): Promise<Uint8Array> => {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(`edgerouter/root/${root}`));
-  return new Uint8Array(sig);
-};
+/**
+ * Re-exported so the gate has one import for its own configuration surface.
+ * The derivation itself lives in `@edgerouter/core`, because the budget
+ * authority performs the identical one against its own secret.
+ */
+export { deriveRootKey } from '../../../packages/core/src/token';
