@@ -7,3 +7,7 @@ dist
 lib
 *.tgz
 packages/*/src/**/*.d.ts
+
+# A generated wallet holds a private key. Never in the repo.
+*.wallet.json
+.tmp-wallet/

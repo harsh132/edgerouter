@@ -13,6 +13,19 @@
  * implementation, so there is no seam to hand it a paying fetch. Owning the
  * adapter is what puts `payAndFetch` in the request path.
  *
+ * ## Where the money comes from
+ *
+ * Three sources, and the default is the one that asks the user for nothing:
+ *
+ *   local        a wallet this plugin generates. The user sees an address and
+ *                sends hbar to it; the account is created by that transfer.
+ *                Nothing is typed, and no key ever passes through a form.
+ *   environment  an account id and key from the environment. For CI and for
+ *                anyone who already has a funded account they want used.
+ *   authority    no key at all. Payments are signed by a budget authority that
+ *                holds one, against an allowance this agent was delegated —
+ *                which is how a sub-agent spends without being trusted.
+ *
  * This package is a *bundle*: `dsh.bundle.patch` in its manifest points at
  * `cordis.patch.yml`, which is what makes `dsh plugin add` insert it into a
  * profile's layer stack rather than merely installing it as a dependency.
@@ -22,7 +35,15 @@
 import z from '@deepseek-ai/schemastery';
 import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-settings';
-import { hederaSigner, formatHbar, type PaymentSigner } from '../../sdk/src/index';
+import {
+  connectAuthority,
+  describe,
+  formatHbar,
+  hederaSigner,
+  loadOrCreateWallet,
+  type LocalWallet,
+  type PaymentSigner,
+} from '../../sdk/src/index';
 import { EdgerouterAdapter, type Paid } from './adapter';
 
 export { EdgerouterAdapter } from './adapter';
@@ -36,7 +57,7 @@ export const inject = ['llm'];
 const PROVIDER = 'edgerouter';
 const NS = 'llm-edgerouter';
 
-const DEFAULT_CAPABILITY_ENV = 'EDGEROUTER_TOKEN';
+const DEFAULT_CAPABILITY_ENV = 'EDGEROUTER_CAPABILITY';
 const DEFAULT_ACCOUNT_ENV = 'HEDERA_ACCOUNT_ID';
 const DEFAULT_KEY_ENV = 'HEDERA_PRIVATE_KEY';
 /**
@@ -53,16 +74,18 @@ const DEFAULT_BASE_URL = 'https://edgerouter-gate.prakashharsh32.workers.dev';
 const DEFAULT_MAX_AMOUNT = '100000000';
 const DEFAULT_NETWORK = 'hedera:testnet';
 const DEFAULT_CONTEXT_WINDOW = 128_000;
+/** How often an unfunded wallet re-asks whether anything has arrived. */
+const FUNDING_POLL_MS = 20_000;
+
+export type WalletSource = 'local' | 'environment' | 'authority';
 
 export interface Config {
   /** Gate base URL. Defaults to the public gate. */
   baseURL?: string;
-  /** Environment variable holding an optional capability token (`er_…`). */
-  capabilityEnv?: string;
-  /** Hedera account the money leaves. Public, so it is configured directly. */
-  accountId?: string;
-  /** Environment variable holding the payer's private key. Never inline. */
-  privateKeyEnv?: string;
+  /** Where payments are signed. `local` needs no setup at all. */
+  wallet?: WalletSource;
+  /** CAIP-2 network to pay on. */
+  network?: string;
   /**
    * Ceiling for one call, in the asset's smallest unit — tinybars on Hedera.
    *
@@ -70,20 +93,32 @@ export interface Config {
    * present because an uncapped payment client signs whatever it is quoted.
    */
   maxAmount?: string;
-  /** CAIP-2 network to pay on. */
-  network?: string;
   /** Context capacity assumed when the gate does not say. */
   defaultContextWindow?: number;
+
+  /** `environment` only: the account the money leaves. Public. */
+  accountId?: string;
+  /** `environment` only: variable holding the key. Never the key itself. */
+  privateKeyEnv?: string;
+
+  /** `authority` only: where the budget authority listens. */
+  authorityUrl?: string;
+  /** `authority` only: variable holding the delegated capability. */
+  capabilityEnv?: string;
 }
 
 export const Config: z<Config> = z.object({
   baseURL: z.string().default(DEFAULT_BASE_URL),
-  capabilityEnv: z.string().role('credential-ref').default(DEFAULT_CAPABILITY_ENV),
+  wallet: z.union(['local', 'environment', 'authority'] as const).default('local'),
+  network: z.string().default(DEFAULT_NETWORK),
+  maxAmount: z.string().default(DEFAULT_MAX_AMOUNT),
+  defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
+
   accountId: z.string(),
   privateKeyEnv: z.string().role('credential-ref').default(DEFAULT_KEY_ENV),
-  maxAmount: z.string().default(DEFAULT_MAX_AMOUNT),
-  network: z.string().default(DEFAULT_NETWORK),
-  defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
+
+  authorityUrl: z.string(),
+  capabilityEnv: z.string().role('credential-ref').default(DEFAULT_CAPABILITY_ENV),
 });
 
 /**
@@ -95,7 +130,9 @@ export const Config: z<Config> = z.object({
 export const resolveMaxAmount = (raw: string | undefined): bigint => {
   const text = (raw ?? DEFAULT_MAX_AMOUNT).trim();
   if (!/^\d+$/.test(text)) {
-    throw new Error(`llm-edgerouter: maxAmount must be a whole number of the smallest unit, got "${text}"`);
+    throw new Error(
+      `llm-edgerouter: maxAmount must be a whole number of the smallest unit, got "${text}"`,
+    );
   }
   const value = BigInt(text);
   if (value <= 0n) throw new Error('llm-edgerouter: maxAmount must be greater than zero');
@@ -138,7 +175,10 @@ export function apply(ctx: Context, config: Config): void {
     const now = current();
     return {
       baseURL: now.baseURL ?? DEFAULT_BASE_URL,
-      capability: process.env[now.capabilityEnv ?? DEFAULT_CAPABILITY_ENV] ?? '',
+      // The gate is permissionless, so nothing is sent in this slot. It stays
+      // in the shape because an attenuated capability *narrowing* what a
+      // request may do is a thing the gate still understands.
+      capability: '',
       maxAmount: maxAmount(),
       network: now.network ?? DEFAULT_NETWORK,
       defaultContextWindow: now.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
@@ -146,39 +186,136 @@ export function apply(ctx: Context, config: Config): void {
   };
 
   /*
-    Cached against the facts that define it, so a settings change that moves the
-    account or the network builds a new signer while an unrelated edit does not
-    pay to parse a key again. Read from the environment rather than the
-    credentials seam for now — that seam is the better home and is the obvious
-    next change; what matters today is that the key is never in a config file
-    and never in a log.
+    One resolved signer, and one sentence saying why there isn't one.
+
+    Both are needed because the interesting failure is not "misconfigured" — it
+    is "correctly configured, waiting for money", which no amount of checking
+    settings will fix. The user needs an address, not a form.
   */
-  let cached: { key: string; signer: PaymentSigner } | undefined;
-  let failedKey: string | undefined;
-  const resolveSigner = (): PaymentSigner | undefined => {
-    const now = current();
-    const accountId = now.accountId ?? process.env[DEFAULT_ACCOUNT_ENV];
-    const privateKey = process.env[now.privateKeyEnv ?? DEFAULT_KEY_ENV];
-    const network = now.network ?? DEFAULT_NETWORK;
-    if (!accountId || !privateKey) return undefined;
+  let signer: PaymentSigner | undefined;
+  let unavailable = 'the payment source has not finished starting up';
+  let wallet: LocalWallet | undefined;
+  let source: WalletSource | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
 
-    const key = `${accountId}|${network}`;
-    if (cached?.key === key) return cached.signer;
-    if (failedKey === key) return undefined;
-
-    try {
-      const signer = hederaSigner({ accountId, privateKey, network });
-      cached = { key, signer };
-      failedKey = undefined;
-      return signer;
-    } catch (error) {
-      // Said once per bad configuration. A bad key fails every call, and
-      // repeating it per request buries the reason. The key is not in the message.
-      failedKey = key;
-      ctx.logger.error(`llm-edgerouter: could not build a payment signer: ${(error as Error).message}`);
-      return undefined;
+  const clearPolling = () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = undefined;
     }
   };
+
+  /**
+   * Reads the local wallet's funding state, and says the useful thing.
+   *
+   * Announced on transition rather than on every poll: a line every twenty
+   * seconds saying nothing has changed is how a log stops being read.
+   */
+  const checkFunding = async (announce: boolean): Promise<void> => {
+    if (!wallet) return;
+    try {
+      const funding = await wallet.refresh();
+      if (!funding.funded) {
+        signer = undefined;
+        unavailable = `this wallet has no funds yet — send hbar to ${wallet.evmAddress} and the account is created by that transfer`;
+        if (announce) {
+          ctx.logger.info(`llm-edgerouter: send hbar to ${wallet.evmAddress} to start paying`);
+        }
+        return;
+      }
+      const first = signer === undefined;
+      signer = wallet.signer();
+      if (first) {
+        ctx.logger.info(
+          `llm-edgerouter: funded — ${funding.accountId} holds ${formatHbar(funding.balanceMinor)}`,
+        );
+      }
+      // Nothing further to wait for; the balance itself is checked per payment
+      // by the network, which is the only place it can be checked honestly.
+      clearPolling();
+    } catch (error) {
+      unavailable = `could not read the wallet's funding state: ${(error as Error).message}`;
+      if (announce) ctx.logger.warn(`llm-edgerouter: ${unavailable}`);
+    }
+  };
+
+  /**
+   * Builds the payment source named by the settings.
+   *
+   * Asynchronous and fire-and-forget, because `apply` must return promptly —
+   * a profile that waits on a mirror node before it finishes booting is a
+   * profile that fails to boot when the mirror node is slow. Until this
+   * resolves the provider is registered and refuses with a reason, which is
+   * strictly better than not existing.
+   */
+  const start = async (): Promise<void> => {
+    const now = current();
+    const network = now.network ?? DEFAULT_NETWORK;
+    source = now.wallet ?? 'local';
+    signer = undefined;
+    wallet = undefined;
+    clearPolling();
+
+    try {
+      if (source === 'environment') {
+        const accountId = now.accountId ?? process.env[DEFAULT_ACCOUNT_ENV];
+        const privateKey = process.env[now.privateKeyEnv ?? DEFAULT_KEY_ENV];
+        if (!accountId || !privateKey) {
+          unavailable = `wallet is set to "environment" but ${DEFAULT_ACCOUNT_ENV} or ${now.privateKeyEnv ?? DEFAULT_KEY_ENV} is not set`;
+          return;
+        }
+        signer = hederaSigner({ accountId, privateKey, network });
+        ctx.logger.info(`llm-edgerouter: paying from ${accountId} on ${network}`);
+        return;
+      }
+
+      if (source === 'authority') {
+        const url = now.authorityUrl;
+        const capability = process.env[now.capabilityEnv ?? DEFAULT_CAPABILITY_ENV];
+        if (!url || !capability) {
+          unavailable = `wallet is set to "authority" but authorityUrl or ${now.capabilityEnv ?? DEFAULT_CAPABILITY_ENV} is missing`;
+          return;
+        }
+        const connected = await connectAuthority({
+          url,
+          capability,
+          resourceUrl: now.baseURL ?? DEFAULT_BASE_URL,
+        });
+        signer = connected.signer;
+        ctx.logger.info(
+          `llm-edgerouter: spending the "${connected.node}" allowance, paid from ${connected.account}`,
+        );
+        return;
+      }
+
+      const handle = loadOrCreateWallet({ network });
+      wallet = handle.wallet;
+      if (handle.created) {
+        ctx.logger.info(`llm-edgerouter: generated a wallet — ${describe(handle.path)}`);
+      }
+      await checkFunding(true);
+      /*
+        Polled only while unfunded. Funding happens outside this process, so
+        there is nothing to react to; and it stops the moment money arrives,
+        because after that the balance is the network's business.
+      */
+      if (!signer) timer = setInterval(() => void checkFunding(false), FUNDING_POLL_MS);
+    } catch (error) {
+      // The key is never in the message; `hederaSigner` guarantees that, and
+      // nothing here adds it back.
+      unavailable = (error as Error).message;
+      ctx.logger.error(`llm-edgerouter: ${unavailable}`);
+    }
+  };
+
+  void start();
+  /*
+    Registered as an effect so the poll stops when the plugin unloads. `effect`
+    is how cordis 4 ties a disposer to a fiber's lifetime — the harness's own
+    services use it — but it is mixed onto the context at runtime rather than
+    declared on the `Context` interface, hence the cast.
+  */
+  (ctx as unknown as { effect(run: () => () => void): unknown }).effect(() => () => clearPolling());
 
   /*
     A running total for the session, printed on every call because the entire
@@ -194,12 +331,17 @@ export function apply(ctx: Context, config: Config): void {
       ? `${formatHbar(paid.amount)} (total ${formatHbar(spent)} over ${calls})`
       : `${paid.amount} (total ${spent} over ${calls})`;
     ctx.logger.info(
-      `paid ${each} for ${paid.model} — sign ${paid.signingMs}ms, call ${paid.requestMs}ms`
-      + (paid.transaction ? ` — ${paid.transaction}` : ''),
+      `paid ${each} for ${paid.model} — sign ${paid.signingMs}ms, call ${paid.requestMs}ms` +
+        (paid.transaction ? ` — ${paid.transaction}` : ''),
     );
   };
 
-  const adapter = new EdgerouterAdapter({ connection, signer: resolveSigner, onPaid });
+  const adapter = new EdgerouterAdapter({
+    connection,
+    signer: () => signer,
+    unavailableReason: () => unavailable,
+    onPaid,
+  });
 
   ctx.llm.registerConfigurableProviders([
     { provider: PROVIDER, displayName: 'edgerouter', settingsNs: NS, settingsPath: [] },
@@ -218,10 +360,13 @@ export function apply(ctx: Context, config: Config): void {
         current = source;
       },
       onChange: () => {
-        // Everything else resolves per request; only the cached signer holds
-        // state that a changed account or network must invalidate.
-        cached = undefined;
-        failedKey = undefined;
+        /*
+          Everything else resolves per request. The payment source does not: it
+          holds a wallet, a poll, and possibly a connection to another process,
+          so a changed network or source has to tear that down and build it
+          again rather than be read afresh next call.
+        */
+        void start();
       },
     });
   });

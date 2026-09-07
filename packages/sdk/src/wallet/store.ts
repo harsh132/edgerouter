@@ -1,0 +1,117 @@
+/**
+ * Where the generated key lives.
+ *
+ * Separate from `local.ts` so that module stays runtime-agnostic — the wallet
+ * logic runs anywhere `fetch` does, and only this file needs a filesystem.
+ *
+ * ## On protecting it
+ *
+ * The file is written `0600` and its directory `0700`, which on Unix means the
+ * user's other accounts cannot read it. On Windows those bits do nothing, and
+ * saying otherwise would be worse than saying nothing, so `describe()` reports
+ * what protection actually applies rather than a reassuring constant.
+ *
+ * It is not encrypted at rest. That is a deliberate choice, not an omission:
+ * encryption needs a key, and the only key available without prompting the user
+ * on every launch would have to sit beside the ciphertext — which protects
+ * nothing and merely looks like it does. A passphrase would protect it, and
+ * would also mean typing a passphrase before an agent can run unattended, which
+ * is the property this whole design exists to provide.
+ *
+ * So the honest statement is the one in the README: this holds what the user
+ * chose to put in it, and `sweep` gets it back out.
+ */
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, platform } from 'node:os';
+import { dirname, join } from 'node:path';
+import { generateWallet, openWallet, type LocalWallet, type WalletMaterial } from './local';
+import { HEDERA_TESTNET } from '../pay/hedera';
+
+export const defaultHome = (): string =>
+  process.env.EDGEROUTER_HOME ?? join(homedir(), '.edgerouter');
+
+/** One wallet per network, so testnet play cannot touch a mainnet balance. */
+export const walletPath = (network: string, home = defaultHome()): string =>
+  join(home, `${network.replace(/[^\w.-]/g, '-')}.wallet.json`);
+
+const readMaterial = (path: string): WalletMaterial | null => {
+  if (!existsSync(path)) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    /*
+      Refused rather than replaced. Silently generating a fresh wallet over an
+      unreadable one would abandon whatever the old key held — the file may be
+      damaged, but the funds behind it are not.
+    */
+    throw new Error(`${path} exists but is not readable JSON; move it aside rather than losing it`);
+  }
+  const m = parsed as Record<string, unknown>;
+  if (
+    typeof m.privateKey !== 'string' ||
+    typeof m.publicKey !== 'string' ||
+    typeof m.evmAddress !== 'string' ||
+    typeof m.network !== 'string'
+  ) {
+    throw new Error(`${path} is not an edgerouter wallet; move it aside rather than losing it`);
+  }
+  return {
+    privateKey: m.privateKey,
+    publicKey: m.publicKey,
+    evmAddress: m.evmAddress,
+    network: m.network,
+    ...(typeof m.accountId === 'string' ? { accountId: m.accountId } : {}),
+  };
+};
+
+const write = (path: string, material: WalletMaterial): void => {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, `${JSON.stringify(material, null, 2)}\n`, { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Windows, or an exotic filesystem. `describe()` is what tells the truth
+    // about this; failing the write over it would help nobody.
+  }
+};
+
+export type WalletHandle = {
+  wallet: LocalWallet;
+  /** Where it is stored, so a UI can say so and a user can back it up. */
+  path: string;
+  /** True when this call generated it. Worth telling the user once. */
+  created: boolean;
+};
+
+/**
+ * Opens the wallet for a network, creating one the first time.
+ *
+ * The resolved account id is written back as soon as the mirror node reports
+ * it, so the id survives a restart and the plugin does not have to re-derive
+ * "am I funded" from the network on every launch.
+ */
+export const loadOrCreateWallet = (
+  options: { network?: string; home?: string; fetch?: typeof fetch } = {},
+): WalletHandle => {
+  const network = options.network ?? HEDERA_TESTNET;
+  const path = walletPath(network, options.home ?? defaultHome());
+
+  const existing = readMaterial(path);
+  const material = existing ?? generateWallet(network);
+  if (!existing) write(path, material);
+
+  const wallet = openWallet(material, {
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    onResolved: (accountId) => write(path, { ...material, accountId }),
+  });
+
+  return { wallet, path, created: existing === null };
+};
+
+/** What protection the stored key actually has here. Not a reassuring guess. */
+export const describe = (path: string): string =>
+  platform() === 'win32'
+    ? `${path} (readable by your Windows user account; not encrypted)`
+    : `${path} (mode 0600, your user only; not encrypted)`;

@@ -52,6 +52,15 @@ export type EdgerouterAdapterOptions = {
   };
   /** Built once the payment credentials resolve; absent means unpaid calls only. */
   signer: () => PaymentSigner | undefined;
+  /**
+   * Why there is no signer, when there is none.
+   *
+   * A generated wallet has one overwhelmingly likely reason — nobody has sent
+   * it anything yet — and the fix is an address, not a setting. A fixed message
+   * about account ids and private keys would send that user to the wrong place
+   * entirely, so the reason travels with the absence.
+   */
+  unavailableReason?: () => string | undefined;
   onPaid?: (paid: Paid) => void;
   /** Injectable for tests. */
   fetch?: typeof fetch;
@@ -125,10 +134,10 @@ export class EdgerouterAdapter extends LlmAdapter {
     const connection = this.options.connection();
     const signer = this.options.signer();
     if (!signer) {
-      throw new LlmError(
-        'edgerouter: no payment signer; set the Hedera account id and private key for this provider',
-        'MISSING_CREDENTIAL',
-      );
+      const reason =
+        this.options.unavailableReason?.() ??
+        'no payment signer is configured for this provider';
+      throw new LlmError(`edgerouter: ${reason}`, 'MISSING_CREDENTIAL');
     }
 
     const url = new URL('/v1/chat/completions', connection.baseURL).toString();
