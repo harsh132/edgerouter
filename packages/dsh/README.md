@@ -41,7 +41,7 @@ For the CLI, the same command works against your profile.
 
 ```yaml
 llm-edgerouter:
-  baseURL: https://your-gate.example
+  baseURL: https://edgerouter-gate.prakashharsh32.workers.dev
   network: hedera:testnet
   accountId: 0.0.1234567
   maxAmount: '100000000'    # ceiling for ONE call, in tinybars. 1 ℏ.

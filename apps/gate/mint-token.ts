@@ -33,9 +33,24 @@ const devVar = (name: string): string | null => {
   return null;
 };
 
-const secret = process.env.SERVICE_SECRET ?? devVar('SERVICE_SECRET');
+/*
+  Which variable holds the secret is itself configurable, for one specific
+  reason: a deployed gate has a different SERVICE_SECRET from the dev one, and
+  the obvious way to keep it around — putting it in `.env` — silently wins over
+  `.dev.vars` and makes every local mint produce production tokens. Naming the
+  variable instead lets both live side by side:
+
+    .env:  PROD_SERVICE_SECRET=...
+    mint:  EDGEROUTER_SECRET_ENV=PROD_SERVICE_SECRET bun apps/gate/mint-token.ts
+
+  A token minted this way is a real bearer credential for a live service. Treat
+  it like one: it is printed to stdout so it can go straight into a variable
+  without passing through a file or a terminal history.
+*/
+const SECRET_ENV = process.env.EDGEROUTER_SECRET_ENV ?? 'SERVICE_SECRET';
+const secret = process.env[SECRET_ENV] ?? devVar('SERVICE_SECRET');
 if (!secret) {
-  console.error('\n  no SERVICE_SECRET in the environment or apps/gate/.dev.vars\n');
+  console.error(`\n  no ${SECRET_ENV} in the environment, and no SERVICE_SECRET in apps/gate/.dev.vars\n`);
   process.exit(1);
 }
 
