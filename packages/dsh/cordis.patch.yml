@@ -1,0 +1,17 @@
+# dsh bundle patch: inserts this plugin into a profile's layer stack.
+#
+# Without this file — and the `dsh.bundle.patch` key in package.json that points
+# at it — `dsh plugin add` installs the package as an ordinary dependency and
+# stops. The harness's post-install reconciliation only adds a package to a
+# profile's `dsh.profile.bundles` when its manifest declares a bundle patch, so
+# a plugin missing this is present on disk, absent from the Loader, and silent:
+# no provider registers, no settings section is recognised, and nothing reports
+# an error.
+#
+# `name` is the package the Loader imports; the module's own exported `name`
+# ('llm-edgerouter') is what the plugin calls itself once loaded, and the two do
+# not have to match. `id` is the stable handle other patches use to target this
+# layer — to override its config, or to disable it.
+- insert:
+    - id: llm-edgerouter
+      name: 'dsh-plugin-edgerouter'

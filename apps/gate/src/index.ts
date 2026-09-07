@@ -314,31 +314,88 @@ type Upstream =
   | { ok: true; body: string; contentType: string }
   | { ok: false; reason: string };
 
+/**
+ * Upstream statuses worth trying again.
+ *
+ * Rate limits and gateway errors are the upstream saying "not now" rather than
+ * "no". Everything else — a bad model id, a malformed body, an auth failure —
+ * will fail identically on a second attempt, and retrying it would only make
+ * the caller wait longer for the same answer.
+ */
+const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+
+const ATTEMPTS = 3;
+
+/**
+ * Calls the upstream, retrying the failures that are worth retrying.
+ *
+ * This matters more than it looks, because settlement happens first: an
+ * upstream failure now falls on a caller who has already paid. Retrying does
+ * not remove that risk, but it removes the most common cause of it — a
+ * transient 429 — and the alternative to spending a second or two here is
+ * charging someone for nothing.
+ *
+ * The body is read once. A Request body is a stream and can only be consumed
+ * once, so re-reading it per attempt would send an empty second request.
+ */
 const callUpstream = async (request: Request, env: Env): Promise<Upstream> => {
   if (!env.OPENROUTER_API_KEY) return { ok: false, reason: 'no upstream key configured' };
 
   const body = await request.text();
-  let response: Response;
-  try {
-    response = await fetch(env.UPSTREAM_URL ?? 'https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-      },
-      body,
-      signal: AbortSignal.timeout(120_000),
-    });
-  } catch (error) {
-    return { ok: false, reason: (error as Error).message };
+  const url = env.UPSTREAM_URL ?? 'https://openrouter.ai/api/v1/chat/completions';
+  let last = 'upstream never answered';
+
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        },
+        body,
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (error) {
+      // A transport failure is by nature transient; the request may not even
+      // have arrived.
+      last = (error as Error).message;
+      if (attempt < ATTEMPTS) {
+        await sleep(attempt);
+        continue;
+      }
+      return { ok: false, reason: last };
+    }
+
+    const text = await response.text();
+    if (response.ok) {
+      return {
+        ok: true,
+        body: text,
+        contentType: response.headers.get('content-type') ?? 'application/json',
+      };
+    }
+
+    last = `upstream ${response.status}`;
+    if (!RETRYABLE.has(response.status) || attempt === ATTEMPTS) {
+      return { ok: false, reason: last };
+    }
+    console.warn(`upstream ${response.status}, retrying (attempt ${attempt} of ${ATTEMPTS})`);
+    await sleep(attempt, response.headers.get('retry-after'));
   }
 
-  const text = await response.text();
-  if (!response.ok) return { ok: false, reason: `upstream ${response.status}` };
+  return { ok: false, reason: last };
+};
 
-  return {
-    ok: true,
-    body: text,
-    contentType: response.headers.get('content-type') ?? 'application/json',
-  };
+/**
+ * Backs off between attempts, honouring `Retry-After` when the upstream sends
+ * a usable one. Capped, because the caller is waiting and a Worker has a
+ * lifetime — a header asking for a minute is information, not an instruction.
+ */
+const sleep = (attempt: number, retryAfter?: string | null): Promise<void> => {
+  const asked = retryAfter ? Number(retryAfter) * 1000 : NaN;
+  const backoff = 400 * 2 ** (attempt - 1);
+  const wait = Math.min(Number.isFinite(asked) && asked > 0 ? asked : backoff, 4_000);
+  return new Promise((resolve) => setTimeout(resolve, wait));
 };
