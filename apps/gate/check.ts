@@ -19,7 +19,8 @@ import {
   parsePayment,
   requirements,
   unbase64,
-  type Requirements,
+  quoteOf,
+  type PaymentRequired,
 } from './src/x402';
 import { priceFor, MODELS } from './src/pricing';
 import { parseNetworks, sameIdentifier, selectNetwork, type NetworkConfig } from './src/networks';
@@ -70,16 +71,16 @@ check(reqs.x402Version === 2, 'x402Version is 2, not 1');
 check(HEADER.signature === 'PAYMENT-SIGNATURE', 'client header is PAYMENT-SIGNATURE');
 check(HEADER.response === 'PAYMENT-RESPONSE', 'settlement header is PAYMENT-RESPONSE');
 check(HEADER.required === 'Payment-Required', 'quote header is Payment-Required');
-check(reqs.paymentRequired.scheme === 'exact', 'scheme is exact');
-check(typeof reqs.paymentRequired.amount === 'string', 'amount is a string, preserving precision');
-check(reqs.paymentRequired.network.startsWith('eip155:'), 'network is EIP-155 form');
+check(quoteOf(reqs).scheme === 'exact', 'scheme is exact');
+check(typeof quoteOf(reqs).amount === 'string', 'amount is a string, preserving precision');
+check(quoteOf(reqs).network.startsWith('eip155:'), 'network is EIP-155 form');
 check(
-  (reqs.paymentRequired.extra as { assetTransferMethod?: string }).assetTransferMethod === 'eip3009',
+  (quoteOf(reqs).extra as { assetTransferMethod?: string }).assetTransferMethod === 'eip3009',
   'EVM transfer method defaults to eip3009',
 );
 check(
-  Object.hasOwn(reqs, 'resource') && Object.hasOwn(reqs, 'paymentRequired'),
-  'body is { x402Version, resource, paymentRequired }',
+  Object.hasOwn(reqs, 'resource') && Array.isArray(reqs.accepts),
+  'body is { x402Version, resource, accepts: [...] } — accepts is a list in v2',
 );
 
 check(unbase64(base64('hello ünïcode')) === 'hello ünïcode', 'base64 round-trips non-ASCII');
@@ -94,12 +95,12 @@ console.log('\nPayment parsing\n');
 const validPayment = {
   x402Version: X402_VERSION,
   resource: reqs.resource,
-  accepted: reqs.paymentRequired,
+  accepted: quoteOf(reqs),
   payload: {
     signature: `0x${'ab'.repeat(65)}`,
     authorization: {
       from: '0x857b06519E91e3A54538791bDbb0E22373e36b66',
-      to: reqs.paymentRequired.payTo,
+      to: quoteOf(reqs).payTo,
       value: '1000',
       validAfter: '1740672089',
       validBefore: '1740672154',
@@ -158,8 +159,8 @@ for (const [label, mutate] of [
 }
 
 const caseChanged = JSON.parse(JSON.stringify(validPayment));
-caseChanged.accepted.payTo = (reqs.paymentRequired.payTo as string).toUpperCase();
-caseChanged.accepted.asset = (reqs.paymentRequired.asset as string).toLowerCase();
+caseChanged.accepted.payTo = (quoteOf(reqs).payTo as string).toUpperCase();
+caseChanged.accepted.asset = (quoteOf(reqs).asset as string).toLowerCase();
 check(
   matchesQuote(parsePayment(base64(JSON.stringify(caseChanged)))!, reqs, 'evm'),
   'EVM address comparison is case-insensitive',
@@ -225,23 +226,23 @@ const hReqs = requirements({
   network: HEDERA,
 });
 
-check(hReqs.paymentRequired.network === 'hedera:testnet', 'network is CAIP-2 hedera:, not eip155:');
-check(hReqs.paymentRequired.asset === '0.0.456858', 'asset is an entity id, not an ERC-20 address');
-check(hReqs.paymentRequired.payTo === '0.0.1234', 'payTo is a Hedera account id');
+check(quoteOf(hReqs).network === 'hedera:testnet', 'network is CAIP-2 hedera:, not eip155:');
+check(quoteOf(hReqs).asset === '0.0.456858', 'asset is an entity id, not an ERC-20 address');
+check(quoteOf(hReqs).payTo === '0.0.1234', 'payTo is a Hedera account id');
 check(
-  (hReqs.paymentRequired.extra as { feePayer?: string }).feePayer === '0.0.1235',
+  (quoteOf(hReqs).extra as { feePayer?: string }).feePayer === '0.0.1235',
   'extra carries a feePayer, which the spec requires',
 );
 check(
-  !('assetTransferMethod' in hReqs.paymentRequired.extra),
+  !('assetTransferMethod' in quoteOf(hReqs).extra),
   'Hedera does not carry an EVM transfer method',
 );
-check(hReqs.paymentRequired.maxTimeoutSeconds === 180, 'Hedera gets a longer timeout than EVM');
+check(quoteOf(hReqs).maxTimeoutSeconds === 180, 'Hedera gets a longer timeout than EVM');
 
 const hederaPayment = {
   x402Version: 2,
   resource: hReqs.resource,
-  accepted: hReqs.paymentRequired,
+  accepted: quoteOf(hReqs),
   payload: { transaction: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' },
 };
 const hParsed = parsePayment(base64(JSON.stringify(hederaPayment)));

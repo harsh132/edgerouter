@@ -7,11 +7,12 @@
     "apps/*"
   ],
   "scripts": {
-    "check": "bun packages/core/check.ts && bun apps/gate/check.ts",
+    "check": "bun packages/core/check.ts && bun packages/sdk/check.ts && bun apps/gate/check.ts",
     "smoke": "bun apps/gate/smoke.ts",
     "dev": "wrangler dev --config apps/gate/wrangler.jsonc",
     "typecheck": "tsc --noEmit",
-    "facilitator-check": "bun apps/gate/facilitator-check.ts"
+    "facilitator-check": "bun apps/gate/facilitator-check.ts",
+    "pay-check": "bun packages/sdk/pay-check.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260907.1",

@@ -16,10 +16,12 @@
  * papers over the difference — that path would silently produce EVM-shaped
  * quotes for Hedera and fail at the facilitator with something unhelpful.
  *
- * x402 v2 carries a single `paymentRequired` rather than v1's list of accepted
- * options, so the server names one network per request. The client asks for one
- * with `?network=` or the `X-Payment-Network` header; otherwise it gets the
- * configured default.
+ * The 402 body carries an `accepts` array, so a server *may* quote several
+ * networks at once. This one quotes exactly one per request: a client that
+ * asked for Hedera and was handed a list would still have to be told which
+ * entry we actually meant, and offering two chains we cannot both settle is
+ * worse than offering the one we can. The client asks with `?network=` or the
+ * `X-Payment-Network` header; otherwise it gets the configured default.
  */
 
 export type NetworkConfig =

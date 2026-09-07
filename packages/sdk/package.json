@@ -1,0 +1,12 @@
+{
+  "name": "@edgerouter/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "Wallets, funding, and the x402 client. What the DSH plugin and the MCP adapter both sit on.",
+  "dependencies": {
+    "@x402/hedera": "^2.25.0",
+    "@x402/core": "^2.25.0"
+  }
+}

@@ -158,10 +158,10 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
   }
 
   /*
-    One network per quote: x402 v2 carries a single `paymentRequired` rather
-    than v1's list of accepted options. An unrecognised request is refused
-    rather than quoted on the default — a client that asked for Hedera and
-    received a Base quote would sign something it cannot settle.
+    One network per quote. The 402 body could carry several in `accepts`, but
+    an unrecognised request is refused rather than quoted on the default — a
+    client that asked for Hedera and received a Base quote would sign something
+    it cannot settle.
   */
   const networks = parseNetworks(env.NETWORKS);
   if (networks.size === 0) {

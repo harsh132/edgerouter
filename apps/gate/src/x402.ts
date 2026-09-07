@@ -3,15 +3,25 @@ import { sameIdentifier, type NetworkConfig } from './networks';
 /**
  * x402 v2, resource-server side.
  *
- * Wire format is from the specification rather than memory, because the
- * protocol renamed its headers between v1 and v2 — `X-PAYMENT` became
- * `PAYMENT-SIGNATURE` — and a gate built against the older names is
- * interoperable with nothing.
+ * Wire format is taken from `@x402/core`'s own types rather than from memory,
+ * because two details are easy to get wrong and neither fails loudly:
+ *
+ *   1. v2 renamed the headers. `X-PAYMENT` became `PAYMENT-SIGNATURE`, and a
+ *      gate built against the older name is interoperable with nothing.
+ *   2. v2 did *not* collapse `accepts` into a single object. The 402 body still
+ *      carries an array of requirements the client may choose between, exactly
+ *      as v1 did. An earlier version of this file emitted a singular
+ *      `paymentRequired`, which no standard client can read — `@x402/core`'s
+ *      client looks for `paymentRequired.accepts` and would find nothing.
  *
  *   402 response  →  header `Payment-Required`, body { x402Version, resource,
- *                    paymentRequired }
+ *                    accepts: [ ... ] }
  *   client sends  →  header `PAYMENT-SIGNATURE`, base64 JSON payload
  *   we answer     →  header `PAYMENT-RESPONSE`, base64 settlement details
+ *
+ * The facilitator is handed one *flat* `PaymentRequirements` — the entry the
+ * client actually accepted — not the whole envelope. Sending the envelope makes
+ * every verification fail with something unhelpful.
  *
  * Verification and settlement both go to a facilitator. This Worker never
  * touches a chain: it holds no key, signs nothing, and keeps no record of what
@@ -32,7 +42,10 @@ export type Resource = {
   mimeType: string;
 };
 
-export type PaymentRequired = {
+/**
+ * One payment option. Flat, and the unit the facilitator speaks in.
+ */
+export type PaymentRequirements = {
   scheme: 'exact';
   /** CAIP-2. `eip155:84532` or `hedera:testnet` — the prefixes differ. */
   network: string;
@@ -63,19 +76,29 @@ export type HederaExtra = {
   feePayer: string;
 };
 
-export type Requirements = {
+/** The 402 body. `accepts` is a list even when we only ever offer one entry. */
+export type PaymentRequired = {
   x402Version: typeof X402_VERSION;
   resource: Resource;
-  paymentRequired: PaymentRequired;
+  accepts: PaymentRequirements[];
 };
 
 /** What arrives in `PAYMENT-SIGNATURE`, once decoded. Entirely untrusted. */
 export type PaymentPayload = {
   x402Version: number;
-  resource: Resource;
-  accepted: PaymentRequired;
+  resource?: Resource;
+  accepted: PaymentRequirements;
   payload: Record<string, unknown>;
 };
+
+/**
+ * The single option we are quoting.
+ *
+ * We offer one network per request, so this is `accepts[0]`. Named rather than
+ * indexed inline so that the day we quote two, every caller that assumed one
+ * shows up here instead of silently pricing the wrong chain.
+ */
+export const quoteOf = (required: PaymentRequired): PaymentRequirements => required.accepts[0]!;
 
 /**
  * Builds the 402 a client needs in order to pay.
@@ -90,7 +113,7 @@ export const requirements = (params: {
   amountMinor: bigint;
   description: string;
   network: NetworkConfig;
-}): Requirements => {
+}): PaymentRequired => {
   const common = {
     scheme: 'exact' as const,
     network: params.network.id,
@@ -100,6 +123,18 @@ export const requirements = (params: {
     maxTimeoutSeconds: params.network.maxTimeoutSeconds,
   };
 
+  const accepted: PaymentRequirements =
+    params.network.kind === 'hedera'
+      ? { ...common, extra: { feePayer: params.network.feePayer } }
+      : {
+          ...common,
+          extra: {
+            assetTransferMethod: 'eip3009' as const,
+            name: params.network.assetName,
+            version: params.network.assetVersion,
+          },
+        };
+
   return {
     x402Version: X402_VERSION,
     resource: {
@@ -107,26 +142,16 @@ export const requirements = (params: {
       description: params.description,
       mimeType: 'application/json',
     },
-    paymentRequired:
-      params.network.kind === 'hedera'
-        ? { ...common, extra: { feePayer: params.network.feePayer } }
-        : {
-            ...common,
-            extra: {
-              assetTransferMethod: 'eip3009' as const,
-              name: params.network.assetName,
-              version: params.network.assetVersion,
-            },
-          },
+    accepts: [accepted],
   };
 };
 
-export const paymentRequiredResponse = (reqs: Requirements): Response =>
-  new Response(JSON.stringify(reqs), {
+export const paymentRequiredResponse = (required: PaymentRequired): Response =>
+  new Response(JSON.stringify(required), {
     status: 402,
     headers: {
       'content-type': 'application/json',
-      [HEADER.required]: base64(JSON.stringify(reqs)),
+      [HEADER.required]: base64(JSON.stringify(required)),
     },
   });
 
@@ -212,11 +237,11 @@ export const parsePayment = (header: string | null): PaymentPayload | null => {
  */
 export const matchesQuote = (
   payment: PaymentPayload,
-  reqs: Requirements,
+  required: PaymentRequired,
   kind: NetworkConfig['kind'],
 ): boolean => {
   const a = payment.accepted;
-  const r = reqs.paymentRequired;
+  const r = quoteOf(required);
   return (
     a.scheme === r.scheme &&
     a.network === r.network &&
@@ -267,25 +292,37 @@ const facilitatorCall = async (
   }
   // Facilitators signal a rejected payment in the body, not the status.
   if (parsed.isValid === false || parsed.success === false) {
-    const detail = typeof parsed.invalidReason === 'string' ? parsed.invalidReason : 'rejected';
+    const detail =
+      typeof parsed.invalidReason === 'string'
+        ? parsed.invalidReason
+        : typeof parsed.errorReason === 'string'
+          ? parsed.errorReason
+          : 'rejected';
     return { ok: false, reason: detail };
   }
 
   return { ok: true, body: parsed };
 };
 
+/**
+ * The body both facilitator endpoints take.
+ *
+ * `paymentRequirements` is the flat accepted entry, not the 402 envelope —
+ * see the note at the top of this file.
+ */
+const facilitatorBody = (payment: PaymentPayload, required: PaymentRequired) => ({
+  x402Version: X402_VERSION,
+  paymentPayload: payment,
+  paymentRequirements: quoteOf(required),
+});
+
 /** Does this signature actually pay these terms? Asked before serving. */
 export const verifyPayment = (
   facilitator: { url: string; apiKey?: string },
   payment: PaymentPayload,
-  reqs: Requirements,
+  required: PaymentRequired,
 ): Promise<FacilitatorResult> =>
-  facilitatorCall(
-    facilitator.url,
-    '/verify',
-    { x402Version: X402_VERSION, paymentPayload: payment, paymentRequirements: reqs },
-    facilitator.apiKey,
-  );
+  facilitatorCall(facilitator.url, '/verify', facilitatorBody(payment, required), facilitator.apiKey);
 
 /**
  * Move the money. Called *after* the upstream call succeeds.
@@ -299,11 +336,6 @@ export const verifyPayment = (
 export const settlePayment = (
   facilitator: { url: string; apiKey?: string },
   payment: PaymentPayload,
-  reqs: Requirements,
+  required: PaymentRequired,
 ): Promise<FacilitatorResult> =>
-  facilitatorCall(
-    facilitator.url,
-    '/settle',
-    { x402Version: X402_VERSION, paymentPayload: payment, paymentRequirements: reqs },
-    facilitator.apiKey,
-  );
+  facilitatorCall(facilitator.url, '/settle', facilitatorBody(payment, required), facilitator.apiKey);
