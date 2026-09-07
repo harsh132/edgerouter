@@ -6,14 +6,18 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "vars": {
-    // Base Sepolia by default: a testnet, so a misconfigured deploy cannot
-    // move real money. Override per environment.
-    "PAYMENT_NETWORK": "eip155:84532",
-    "PAYMENT_ASSET": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-    "PAYMENT_PAY_TO": "0x0000000000000000000000000000000000000000",
-    "PAYMENT_ASSET_NAME": "USDC",
-    "PAYMENT_ASSET_VERSION": "2"
-  }
+    // Testnets by default, so a misconfigured deploy cannot move real money.
+    // Hedera is CAIP-2 `hedera:testnet` with entity-id assets, not eip155 —
+    // the two are genuinely different shapes, not one with different values.
+    "NETWORKS": "[{\"kind\":\"evm\",\"id\":\"eip155:84532\",\"asset\":\"0x036CbD53842c5426634e7929541eC2318f3dCF7e\",\"payTo\":\"0x0000000000000000000000000000000000000000\",\"assetName\":\"USDC\",\"assetVersion\":\"2\"},{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.0\",\"feePayer\":\"0.0.0\"}]",
+    "DEFAULT_NETWORK": "eip155:84532"
+  },
+  // The only state the gate keeps: who was served but never settled. Losing it
+  // forgets debt, which costs the operator money but never wrongly refuses a
+  // paying user — so eventual consistency is the right trade here.
+  "kv_namespaces": [
+    { "binding": "DEBT", "id": "PLACEHOLDER_CREATE_WITH_WRANGLER_KV_NAMESPACE_CREATE" }
+  ]
   // Secrets, set with `wrangler secret put`, never in this file:
   //   SERVICE_SECRET, FACILITATOR_URL, FACILITATOR_API_KEY, OPENROUTER_API_KEY
 }

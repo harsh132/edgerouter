@@ -1,3 +1,5 @@
+import { sameIdentifier, type NetworkConfig } from './networks';
+
 /**
  * x402 v2, resource-server side.
  *
@@ -32,19 +34,33 @@ export type Resource = {
 
 export type PaymentRequired = {
   scheme: 'exact';
-  /** EIP-155 form, e.g. `eip155:84532`. */
+  /** CAIP-2. `eip155:84532` or `hedera:testnet` — the prefixes differ. */
   network: string;
   /** Smallest unit, as a string — precision must survive JSON. */
   amount: string;
-  /** ERC-20 contract of the token being paid in. */
+  /** ERC-20 address on EVM; a Hedera entity id such as `0.0.456858` otherwise. */
   asset: string;
   payTo: string;
   maxTimeoutSeconds: number;
-  extra: {
-    assetTransferMethod: 'eip3009' | 'permit2' | 'erc7710';
-    name?: string;
-    version?: string;
-  };
+  extra: EvmExtra | HederaExtra;
+};
+
+/** EIP-712 domain, so the client can build an EIP-3009 authorization. */
+export type EvmExtra = {
+  assetTransferMethod: 'eip3009' | 'permit2' | 'erc7710';
+  name?: string;
+  version?: string;
+};
+
+/**
+ * Hedera carries a fee payer instead of a transfer method.
+ *
+ * Mandatory rather than optional: the client builds the transaction, so without
+ * a declared fee payer it could charge Hedera fees to an account that never
+ * agreed to pay them.
+ */
+export type HederaExtra = {
+  feePayer: string;
 };
 
 export type Requirements = {
@@ -73,35 +89,37 @@ export const requirements = (params: {
   request: Request;
   amountMinor: bigint;
   description: string;
-  config: {
-    network: string;
-    asset: string;
-    payTo: string;
-    assetName: string;
-    assetVersion: string;
-    maxTimeoutSeconds: number;
-  };
-}): Requirements => ({
-  x402Version: X402_VERSION,
-  resource: {
-    url: new URL(params.request.url).toString(),
-    description: params.description,
-    mimeType: 'application/json',
-  },
-  paymentRequired: {
-    scheme: 'exact',
-    network: params.config.network,
+  network: NetworkConfig;
+}): Requirements => {
+  const common = {
+    scheme: 'exact' as const,
+    network: params.network.id,
     amount: params.amountMinor.toString(),
-    asset: params.config.asset,
-    payTo: params.config.payTo,
-    maxTimeoutSeconds: params.config.maxTimeoutSeconds,
-    extra: {
-      assetTransferMethod: 'eip3009',
-      name: params.config.assetName,
-      version: params.config.assetVersion,
+    asset: params.network.asset,
+    payTo: params.network.payTo,
+    maxTimeoutSeconds: params.network.maxTimeoutSeconds,
+  };
+
+  return {
+    x402Version: X402_VERSION,
+    resource: {
+      url: new URL(params.request.url).toString(),
+      description: params.description,
+      mimeType: 'application/json',
     },
-  },
-});
+    paymentRequired:
+      params.network.kind === 'hedera'
+        ? { ...common, extra: { feePayer: params.network.feePayer } }
+        : {
+            ...common,
+            extra: {
+              assetTransferMethod: 'eip3009' as const,
+              name: params.network.assetName,
+              version: params.network.assetVersion,
+            },
+          },
+  };
+};
 
 export const paymentRequiredResponse = (reqs: Requirements): Response =>
   new Response(JSON.stringify(reqs), {
@@ -166,6 +184,21 @@ export const parsePayment = (header: string | null): PaymentPayload | null => {
   if (typeof accepted.network !== 'string' || typeof accepted.payTo !== 'string') return null;
   if (typeof accepted.asset !== 'string') return null;
 
+  /*
+    The inner payload is shaped by the network, and an empty object would sail
+    past a check that only looked at `accepted`. Hedera sends one base64 blob;
+    EVM sends a signature plus the authorization it signs over.
+  */
+  const payload = p.payload as Record<string, unknown>;
+  if (accepted.network.startsWith('hedera:')) {
+    if (typeof payload.transaction !== 'string' || payload.transaction.length === 0) return null;
+  } else {
+    if (typeof payload.signature !== 'string' || !/^0x[0-9a-fA-F]+$/.test(payload.signature)) {
+      return null;
+    }
+    if (!payload.authorization || typeof payload.authorization !== 'object') return null;
+  }
+
   return value as PaymentPayload;
 };
 
@@ -177,14 +210,18 @@ export const parsePayment = (header: string | null): PaymentPayload | null => {
  * ours. A client that signs a correct payment for one cent against a request we
  * priced at one dollar produces a payload that verifies perfectly and underpays.
  */
-export const matchesQuote = (payment: PaymentPayload, reqs: Requirements): boolean => {
+export const matchesQuote = (
+  payment: PaymentPayload,
+  reqs: Requirements,
+  kind: NetworkConfig['kind'],
+): boolean => {
   const a = payment.accepted;
   const r = reqs.paymentRequired;
   return (
     a.scheme === r.scheme &&
     a.network === r.network &&
-    a.asset.toLowerCase() === r.asset.toLowerCase() &&
-    a.payTo.toLowerCase() === r.payTo.toLowerCase() &&
+    sameIdentifier(kind, a.asset, r.asset) &&
+    sameIdentifier(kind, a.payTo, r.payTo) &&
     // At least the quoted amount. Overpaying is the payer's business.
     BigInt(a.amount) >= BigInt(r.amount)
   );

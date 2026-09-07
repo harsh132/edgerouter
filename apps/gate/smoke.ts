@@ -80,6 +80,31 @@ check(
 const unknown = await post({ authorization: `Bearer ${bearer(root)}` }, { ...chat, model: 'nope/nope' });
 check(unknown.status === 400, `unknown model -> 400 (got ${unknown.status})`);
 
+const hederaQuote = await fetch(`${BASE}/v1/chat/completions?network=hedera:testnet`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer(root)}` },
+  body: JSON.stringify(chat),
+});
+const hQuote: Json = await hederaQuote.json();
+check(hederaQuote.status === 402, `hedera quote -> 402 (got ${hederaQuote.status})`);
+check(hQuote.paymentRequired?.network === 'hedera:testnet', 'hedera quote names hedera:testnet');
+check(typeof hQuote.paymentRequired?.extra?.feePayer === 'string', 'hedera quote carries a feePayer');
+check(
+  hQuote.paymentRequired?.extra?.assetTransferMethod === undefined,
+  'hedera quote carries no EVM transfer method',
+);
+
+const badNet = await fetch(`${BASE}/v1/chat/completions?network=eip155:999999`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer(root)}` },
+  body: JSON.stringify(chat),
+});
+const badNetBody: Json = await badNet.json();
+check(
+  badNet.status === 400 && badNetBody.error?.code === 'unsupported_network',
+  `an unconfigured network is refused (got ${badNet.status} ${badNetBody.error?.code})`,
+);
+
 const quoted = await post({ authorization: `Bearer ${bearer(root)}` }, chat);
 const quote: Json = await quoted.json();
 check(quoted.status === 402, `good capability, no payment -> 402 (got ${quoted.status})`);

@@ -28,6 +28,8 @@ import {
 } from './x402';
 import { priceFor, MODELS } from './pricing';
 import { deriveRootKey, type Env } from './env';
+import { DEFAULT_POLICY, payerOf, recordFailure, recordSuccess, standing } from './ledger';
+import { parseNetworks, selectNetwork } from './networks';
 
 const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response =>
   new Response(JSON.stringify(body), {
@@ -79,6 +81,7 @@ export default {
         ok: true,
         x402: Boolean(env.FACILITATOR_URL),
         upstream: Boolean(env.OPENROUTER_API_KEY),
+        networks: [...parseNetworks(env.NETWORKS).keys()],
       });
     }
 
@@ -154,22 +157,65 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
     return refuse(`policy_${decision.rule}`, decision.detail, 403);
   }
 
+  /*
+    One network per quote: x402 v2 carries a single `paymentRequired` rather
+    than v1's list of accepted options. An unrecognised request is refused
+    rather than quoted on the default — a client that asked for Hedera and
+    received a Base quote would sign something it cannot settle.
+  */
+  const networks = parseNetworks(env.NETWORKS);
+  if (networks.size === 0) {
+    return refuse('unconfigured', 'no payment networks configured', 503);
+  }
+  const chosen = selectNetwork(networks, request, env.DEFAULT_NETWORK);
+  if (!chosen.ok) {
+    return refuse(
+      'unsupported_network',
+      `no configured network for ${chosen.asked}; try one of ${[...networks.keys()].join(', ')}`,
+      400,
+    );
+  }
+  const network = chosen.network;
+
   const reqs = requirements({
     request,
     amountMinor: price,
     description: `edgerouter inference: ${model}`,
-    config: {
-      network: env.PAYMENT_NETWORK,
-      asset: env.PAYMENT_ASSET,
-      payTo: env.PAYMENT_PAY_TO,
-      assetName: env.PAYMENT_ASSET_NAME ?? 'USDC',
-      assetVersion: env.PAYMENT_ASSET_VERSION ?? '2',
-      maxTimeoutSeconds: 60,
-    },
+    network,
   });
 
   const payment = parsePayment(request.headers.get(HEADER.signature));
   if (!payment) return paymentRequiredResponse(reqs);
+
+  /*
+    Debt is checked here — after a payment has been offered, before anything is
+    spent on this caller's behalf. Checking it earlier would refuse a quote to
+    someone who has not yet had a chance to settle; checking it later would mean
+    the upstream call is already paid for.
+  */
+  /*
+    Telemetry, not a control. Recorded because knowing the unsettled rate is how
+    a facilitator problem gets noticed, but it defends nothing: both a payer
+    address and a capability can be rotated for the price of a signature, so a
+    determined caller simply arrives as somebody new. The actual defence is
+    escrow — see the batch-settlement note in docs/PROJECTS.md.
+
+    On Hedera the payer is inside a serialized transaction we do not decode, so
+    only the capability axis is recorded there.
+  */
+  const payer = network.kind === 'evm' ? payerOf(payment.payload) : null;
+  const ids = { payer, capability: token.node };
+
+  if (env.DEBT) {
+    const good = await standing(env.DEBT, DEFAULT_POLICY, ids);
+    if (!good.ok) {
+      return refuse(
+        'unsettled_debt',
+        `earlier calls were served but never settled (${good.debt.failures} failures, ${good.debt.owedMinor} owed)`,
+        402,
+      );
+    }
+  }
 
   /*
     Checked before the facilitator sees it. A facilitator verifies that a
@@ -177,7 +223,7 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
     are the ones we quoted. Without this, a correctly signed payment for one
     cent settles cleanly against a request priced at a dollar.
   */
-  if (!matchesQuote(payment, reqs)) {
+  if (!matchesQuote(payment, reqs, network.kind)) {
     return refuse('payment_mismatch', 'payment terms do not match the quote', 402);
   }
 
@@ -196,12 +242,15 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
   const settled = await settlePayment(facilitator, payment, reqs);
   if (!settled.ok) {
     /*
-      The answer exists and the user has it coming; settlement failed on our
-      side. Serving it is the honest outcome — refusing would mean withholding
-      something the payer authorised because our accounting had a bad minute.
-      Logged loudly rather than silently absorbed.
+      The answer exists and the payer authorised the charge; settlement failed
+      afterwards. It is served anyway — withholding a paid-for answer because
+      our accounting had a bad minute is the wrong way round — but the loss is
+      recorded so the same caller cannot repeat it indefinitely.
     */
     console.error('settlement failed after successful upstream call', settled.reason);
+    if (env.DEBT) await recordFailure(env.DEBT, DEFAULT_POLICY, ids, price);
+  } else if (env.DEBT) {
+    await recordSuccess(env.DEBT, DEFAULT_POLICY, ids);
   }
 
   return new Response(upstream.body, {

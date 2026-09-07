@@ -19,18 +19,31 @@ export type Env = {
   FACILITATOR_URL?: string;
   FACILITATOR_API_KEY?: string;
 
-  /** EIP-155 network, e.g. `eip155:84532`. */
-  PAYMENT_NETWORK: string;
-  /** ERC-20 contract payments are denominated in. */
-  PAYMENT_ASSET: string;
-  /** Where payments land. */
-  PAYMENT_PAY_TO: string;
-  PAYMENT_ASSET_NAME?: string;
-  PAYMENT_ASSET_VERSION?: string;
+  /**
+   * Accepted networks, as a JSON array of NetworkConfig — see ./networks.
+   *
+   * A list rather than a spread of scalars, because Hedera and EVM need
+   * different fields and flat vars stop scaling at the second network.
+   */
+  NETWORKS?: string;
+  /** Which one to quote when the client does not ask for a specific network. */
+  DEFAULT_NETWORK?: string;
 
   /** Upstream inference. Any OpenAI-compatible endpoint. */
   OPENROUTER_API_KEY?: string;
   UPSTREAM_URL?: string;
+
+  /**
+   * Unsettled-debt ledger.
+   *
+   * The only state the gate keeps, and it is deliberately the kind that can be
+   * lost without harm: losing it forgets who owes what, which costs the
+   * operator money but never wrongly refuses a paying user. KV's eventual
+   * consistency is acceptable for the same reason — a debtor slipping through
+   * for a few seconds after a write is a bounded loss, and the alternative is
+   * a strongly consistent store in the hot path of every request.
+   */
+  DEBT?: KVNamespace;
 };
 
 const encoder = new TextEncoder();

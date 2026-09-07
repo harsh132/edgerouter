@@ -22,6 +22,7 @@ import {
   type Requirements,
 } from './src/x402';
 import { priceFor, MODELS } from './src/pricing';
+import { parseNetworks, sameIdentifier, selectNetwork, type NetworkConfig } from './src/networks';
 
 let failures = 0;
 const pass = (m: string) => console.log(`  ok    ${m}`);
@@ -39,18 +40,30 @@ console.log('x402 v2 wire format\n');
 
 const REQUEST = new Request('https://gate.edgerouter.io/v1/chat/completions', { method: 'POST' });
 
+const EVM: NetworkConfig = {
+  kind: 'evm',
+  id: 'eip155:84532',
+  asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  payTo: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
+  assetName: 'USDC',
+  assetVersion: '2',
+  maxTimeoutSeconds: 60,
+};
+
+const HEDERA: NetworkConfig = {
+  kind: 'hedera',
+  id: 'hedera:testnet',
+  asset: '0.0.456858',
+  payTo: '0.0.1234',
+  feePayer: '0.0.1235',
+  maxTimeoutSeconds: 180,
+};
+
 const reqs = requirements({
   request: REQUEST,
   amountMinor: 1_000n,
   description: 'edgerouter inference: deepseek/deepseek-chat',
-  config: {
-    network: 'eip155:84532',
-    asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
-    payTo: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
-    assetName: 'USDC',
-    assetVersion: '2',
-    maxTimeoutSeconds: 60,
-  },
+  network: EVM,
 });
 
 check(reqs.x402Version === 2, 'x402Version is 2, not 1');
@@ -61,8 +74,8 @@ check(reqs.paymentRequired.scheme === 'exact', 'scheme is exact');
 check(typeof reqs.paymentRequired.amount === 'string', 'amount is a string, preserving precision');
 check(reqs.paymentRequired.network.startsWith('eip155:'), 'network is EIP-155 form');
 check(
-  reqs.paymentRequired.extra.assetTransferMethod === 'eip3009',
-  'transfer method defaults to eip3009',
+  (reqs.paymentRequired.extra as { assetTransferMethod?: string }).assetTransferMethod === 'eip3009',
+  'EVM transfer method defaults to eip3009',
 );
 check(
   Object.hasOwn(reqs, 'resource') && Object.hasOwn(reqs, 'paymentRequired'),
@@ -121,11 +134,11 @@ for (const [label, mutate] of [
 console.log('\nQuote matching\n');
 
 const parsed = parsePayment(encoded)!;
-check(matchesQuote(parsed, reqs), 'a payment on our terms matches');
+check(matchesQuote(parsed, reqs, 'evm'), 'a payment on our terms matches');
 
 const overpaid = JSON.parse(JSON.stringify(validPayment));
 overpaid.accepted.amount = '2000';
-check(matchesQuote(parsePayment(base64(JSON.stringify(overpaid)))!, reqs), 'overpaying is accepted');
+check(matchesQuote(parsePayment(base64(JSON.stringify(overpaid)))!, reqs, 'evm'), 'overpaying is accepted');
 
 /*
   Each of these is a payload a facilitator would happily verify — the signature
@@ -141,15 +154,15 @@ for (const [label, mutate] of [
   const cheated = JSON.parse(JSON.stringify(validPayment));
   mutate(cheated);
   const p = parsePayment(base64(JSON.stringify(cheated)));
-  check(p !== null && !matchesQuote(p, reqs), `rejected: ${label}`);
+  check(p !== null && !matchesQuote(p, reqs, 'evm'), `rejected: ${label}`);
 }
 
 const caseChanged = JSON.parse(JSON.stringify(validPayment));
 caseChanged.accepted.payTo = (reqs.paymentRequired.payTo as string).toUpperCase();
 caseChanged.accepted.asset = (reqs.paymentRequired.asset as string).toLowerCase();
 check(
-  matchesQuote(parsePayment(base64(JSON.stringify(caseChanged)))!, reqs),
-  'address comparison is case-insensitive',
+  matchesQuote(parsePayment(base64(JSON.stringify(caseChanged)))!, reqs, 'evm'),
+  'EVM address comparison is case-insensitive',
 );
 
 /* -------------------------------------------------------------------------- */
@@ -200,7 +213,104 @@ check(bearer.startsWith('er_'), 'bearer carries the er_ prefix');
 check(bearer.length < 8_000, `bearer fits in a header (${bearer.length} chars)`);
 
 /* -------------------------------------------------------------------------- */
-/* 6. Pricing refuses to guess                                                 */
+/* 6. Hedera is a different shape, not different values                        */
+/* -------------------------------------------------------------------------- */
+
+console.log('\nHedera\n');
+
+const hReqs = requirements({
+  request: REQUEST,
+  amountMinor: 1_000n,
+  description: 'edgerouter inference on Hedera',
+  network: HEDERA,
+});
+
+check(hReqs.paymentRequired.network === 'hedera:testnet', 'network is CAIP-2 hedera:, not eip155:');
+check(hReqs.paymentRequired.asset === '0.0.456858', 'asset is an entity id, not an ERC-20 address');
+check(hReqs.paymentRequired.payTo === '0.0.1234', 'payTo is a Hedera account id');
+check(
+  (hReqs.paymentRequired.extra as { feePayer?: string }).feePayer === '0.0.1235',
+  'extra carries a feePayer, which the spec requires',
+);
+check(
+  !('assetTransferMethod' in hReqs.paymentRequired.extra),
+  'Hedera does not carry an EVM transfer method',
+);
+check(hReqs.paymentRequired.maxTimeoutSeconds === 180, 'Hedera gets a longer timeout than EVM');
+
+const hederaPayment = {
+  x402Version: 2,
+  resource: hReqs.resource,
+  accepted: hReqs.paymentRequired,
+  payload: { transaction: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' },
+};
+const hParsed = parsePayment(base64(JSON.stringify(hederaPayment)));
+check(hParsed !== null, 'a Hedera payment parses');
+check(hParsed !== null && matchesQuote(hParsed, hReqs, 'hedera'), 'a Hedera payment matches its quote');
+
+/*
+  The payload shapes are not interchangeable. Sending an EVM-style signature for
+  a Hedera quote — or a bare transaction for an EVM one — has to be refused, or
+  it reaches the facilitator as something it cannot settle.
+*/
+const hederaWithEvmPayload = {
+  ...hederaPayment,
+  payload: { signature: `0x${'ab'.repeat(65)}`, authorization: {} },
+};
+check(
+  parsePayment(base64(JSON.stringify(hederaWithEvmPayload))) === null,
+  'an EVM payload against a Hedera quote is refused',
+);
+
+const evmWithHederaPayload = { ...validPayment, payload: { transaction: 'AAAA' } };
+check(
+  parsePayment(base64(JSON.stringify(evmWithHederaPayload))) === null,
+  'a Hedera payload against an EVM quote is refused',
+);
+
+check(sameIdentifier('hedera', '0.0.1234', '0.0.1234'), 'Hedera ids compare exactly');
+check(!sameIdentifier('hedera', '0.0.1234', '0.0.12340'), 'a different Hedera id does not match');
+
+console.log('\nNetwork configuration\n');
+
+const configured = parseNetworks(JSON.stringify([EVM, HEDERA]));
+check(configured.size === 2, 'both networks load from config');
+check(parseNetworks('not json').size === 0, 'malformed config loads nothing rather than throwing');
+check(parseNetworks(JSON.stringify([{ ...HEDERA, feePayer: undefined }])).size === 0,
+  'a Hedera network with no feePayer is dropped');
+check(parseNetworks(JSON.stringify([{ ...EVM, payTo: 'not-an-address' }])).size === 0,
+  'an EVM network with a malformed payTo is dropped');
+check(parseNetworks(JSON.stringify([{ ...EVM, id: 'hedera:testnet' }])).size === 0,
+  'an EVM entry claiming a hedera id is dropped');
+
+const byQuery = selectNetwork(
+  configured,
+  new Request('https://gate.edgerouter.io/v1/chat/completions?network=hedera:testnet'),
+  'eip155:84532',
+);
+check(byQuery.ok && byQuery.network.kind === 'hedera', 'the query parameter selects a network');
+
+const byHeader = selectNetwork(
+  configured,
+  new Request('https://gate.edgerouter.io/v1/chat/completions', {
+    headers: { 'X-Payment-Network': 'hedera:testnet' },
+  }),
+  'eip155:84532',
+);
+check(byHeader.ok && byHeader.network.kind === 'hedera', 'the header selects a network');
+
+const byDefault = selectNetwork(configured, REQUEST, 'eip155:84532');
+check(byDefault.ok && byDefault.network.kind === 'evm', 'the default applies when nothing is asked');
+
+const unknownNet = selectNetwork(
+  configured,
+  new Request('https://gate.edgerouter.io/v1/chat/completions?network=eip155:1'),
+  'eip155:84532',
+);
+check(!unknownNet.ok, 'an unconfigured network is refused, not silently defaulted');
+
+/* -------------------------------------------------------------------------- */
+/* 7. Pricing refuses to guess                                                 */
 /* -------------------------------------------------------------------------- */
 
 console.log('\nPricing\n');
