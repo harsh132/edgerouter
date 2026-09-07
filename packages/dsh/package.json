@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-edgerouter",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "A DeepSeek Harness model provider that pays for its own inference over x402. No account, no API key \u2014 a wallet.",
   "license": "MIT",
   "type": "module",
@@ -11,11 +11,13 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./client": "./client/client.js"
   },
   "files": [
     "lib/**/*.js",
     "lib/**/*.d.ts",
+    "client/client.js",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -28,7 +30,7 @@
     "llm"
   ],
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && node build-client.mjs",
     "pack": "node pack.mjs"
   },
   "peerDependencies": {
@@ -44,13 +46,26 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-client-modules": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-runtime": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.2-rc.1",
     "@deepseek-ai/dsh-llm": "0.1.2-rc.1",
-    "tsdown": "^0.15.6",
-    "@deepseek-ai/dsh-settings": "0.1.2-rc.1"
+    "@deepseek-ai/dsh-settings": "0.1.2-rc.1",
+    "@types/react": "^19.2.18",
+    "react": "^19",
+    "tsdown": "^0.15.6"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
     }
   },
   "peerDependenciesMeta": {

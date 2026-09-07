@@ -259,7 +259,6 @@ export function apply(ctx: Context, config: Config): void {
         publish(
           wallet.evmAddress,
           'waiting for funds — send hbar to walletAddress',
-          `fund ${short(wallet.evmAddress)}`,
         );
         if (announce) {
           ctx.logger.info(`llm-edgerouter: send hbar to ${wallet.evmAddress} to start paying`);
@@ -271,7 +270,6 @@ export function apply(ctx: Context, config: Config): void {
       publish(
         wallet.evmAddress,
         `ready — ${funding.accountId} holds ${formatAmount(wallet.network, funding.balanceMinor)}`,
-        formatAmount(wallet.network, funding.balanceMinor),
       );
       if (first) {
         ctx.logger.info(
@@ -297,19 +295,15 @@ export function apply(ctx: Context, config: Config): void {
     until the log fills up.
   */
   /*
-    Two ways of saying the same thing, because neither reaches everyone.
+    The address goes into the settings section, and the plugin's own settings
+    page renders it — see `src/client.tsx`.
 
-    `toSettings` writes the address into the settings section, which is where it
-    belongs and is also where Desktop declines to render it: the Models pane
-    treats a provider's section as an endpoint-and-key profile, finds no field
-    it recognises, and prints "other fields live in settings.yaml". The value is
-    still there, still correct, and reachable from the button in that same
-    dialog — but it is not on screen.
-
-    `toDirectory` puts it in the provider's display name, which is the one
-    string in that pane a plugin controls. A name is a strange place for a
-    balance, and it is the difference between a user seeing an address and a
-    user being told to go and find a YAML file.
+    It briefly went into the provider's display name too, because Desktop's
+    Models pane renders a provider section as an endpoint-and-key profile and
+    shows none of our fields. That worked and looked terrible: a truncated
+    address, repeated in the row and the edit panel, in a field that is supposed
+    to name a thing rather than report on it. A settings page is the right
+    answer to "the user cannot see this", and a name is not.
   */
   let toSettings: (address: string, status: string) => void = () => {};
   let published = '';
@@ -340,7 +334,6 @@ export function apply(ctx: Context, config: Config): void {
         publish(
           evmWallet.address,
           'waiting for funds — send USDC to walletAddress',
-          `fund ${short(evmWallet.address)}`,
         );
         if (announce) {
           ctx.logger.info(`llm-edgerouter: send USDC to ${evmWallet.address} to start paying`);
@@ -352,7 +345,6 @@ export function apply(ctx: Context, config: Config): void {
       publish(
         evmWallet.address,
         `ready — holds ${formatAmount(evmWallet.network, funding.tokenMinor)}`,
-        formatAmount(evmWallet.network, funding.tokenMinor),
       );
       if (first) {
         ctx.logger.info(
@@ -494,13 +486,9 @@ export function apply(ctx: Context, config: Config): void {
     onPaid,
   });
 
-  const directory = ctx.llm.registerConfigurableProviders([
+  ctx.llm.registerConfigurableProviders([
     { provider: PROVIDER, displayName: 'edgerouter', settingsNs: NS, settingsPath: [] },
   ]);
-
-  /** `0x1234…cdef`. An address nobody can read is not worth the width. */
-  const short = (address: string): string =>
-    address.length > 14 ? `${address.slice(0, 8)}…${address.slice(-4)}` : address;
 
   /**
    * Says where the money goes, everywhere that will listen.
@@ -510,19 +498,10 @@ export function apply(ctx: Context, config: Config): void {
    * unguarded, that is a loop which looks like a working feature until the log
    * fills up.
    */
-  const publish = (address: string, status: string, short_: string) => {
+  const publish = (address: string, status: string) => {
     const line = `${address}|${status}`;
     if (line === published) return;
     published = line;
-
-    try {
-      directory.replace([
-        { provider: PROVIDER, displayName: `edgerouter · ${short_}`, settingsNs: NS, settingsPath: [] },
-      ]);
-    } catch (error) {
-      // A rejected rename is cosmetic. It must not take a working provider down.
-      ctx.logger.warn(`llm-edgerouter: could not update the display name: ${(error as Error).message}`);
-    }
 
     toSettings(address, status);
   };
