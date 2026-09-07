@@ -53,11 +53,26 @@ check(Array.isArray(modelBody.data) && modelBody.data.length > 0, 'models are li
 
 const chat = { model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] };
 
+/*
+  The two halves of the access model, and the reason they differ.
+
+  No capability is not an error: the service is permissionless, so an anonymous
+  caller is quoted a price like anyone else. A capability that cannot be read or
+  verified IS an error — treating it as anonymous would mean a tampered token
+  silently buys what no token buys, and the holder would never learn their
+  delegation had stopped working.
+*/
 const noCap = await post({}, chat);
-check(noCap.status === 401, `no capability -> 401 (got ${noCap.status})`);
+check(noCap.status === 402, `no capability -> 402, not a refusal (got ${noCap.status})`);
+
+const noCapBody: Json = await noCap.json();
+check(
+  Array.isArray(noCapBody.accepts) && noCapBody.accepts.length > 0,
+  'an anonymous caller is quoted a real price',
+);
 
 const badCap = await post({ authorization: 'Bearer er_bm90LWEtdG9rZW4=' }, chat);
-check(badCap.status === 401, `garbage capability -> 401 (got ${badCap.status})`);
+check(badCap.status === 401, `garbage capability -> 401, not anonymous (got ${badCap.status})`);
 
 const forged = { ...root, sig: root.sig.replace(/.$/, '0') };
 const forgedRes = await post({ authorization: `Bearer ${bearer(forged)}` }, chat);

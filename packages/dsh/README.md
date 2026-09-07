@@ -47,13 +47,20 @@ llm-edgerouter:
   maxAmount: '100000000'    # ceiling for ONE call, in tinybars. 1 ℏ.
 ```
 
-Secrets are never in this file. Three environment variables:
+Secrets are never in this file. Two environment variables:
 
 | variable | what |
 |---|---|
-| `EDGEROUTER_TOKEN` | your capability token (`er_…`) |
 | `HEDERA_ACCOUNT_ID` | payer account, if not set as `accountId` above |
 | `HEDERA_PRIVATE_KEY` | the payer's key — this signs the transfers |
+
+That is the whole setup. **There is no signup and no API key**: the gate is
+permissionless, so a wallet is the only credential.
+
+`EDGEROUTER_TOKEN` is optional and does not grant access — the gate settles
+before it serves, so it never extends credit and has nobody to identify. A
+capability instead *narrows* what a request may do: hand an attenuated one to a
+sub-agent to cap its spend, time-limit it, or revoke it.
 
 `maxAmount` is a per-call ceiling, not a budget. The plugin refuses to sign
 anything above it, so a gate that quotes a surprising price gets a refusal

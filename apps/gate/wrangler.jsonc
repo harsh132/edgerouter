@@ -36,12 +36,12 @@
     // read the deployed config to check it matches what we quote.
     "FACILITATOR_URL": "https://api.testnet.blocky402.com"
   },
-  // The only state the gate keeps: who was served but never settled. Losing it
-  // forgets debt, which costs the operator money but never wrongly refuses a
-  // paying user — so eventual consistency is the right trade here.
-  "kv_namespaces": [
-    { "binding": "DEBT", "id": "ae26c00db5a4406582f0c3bb25975b5f" }
-  ]
+  // No storage bindings. The gate settles before it serves, so it never extends
+  // credit and has no debt to remember — which is what lets it stay stateless
+  // and permissionless at the same time.
   // Secrets, set with `wrangler secret put`, never in this file:
-  //   SERVICE_SECRET, FACILITATOR_URL, FACILITATOR_API_KEY, OPENROUTER_API_KEY
+  //   OPENROUTER_API_KEY   required — the upstream this gate resells
+  //   SERVICE_SECRET       only to verify capabilities; anonymous paid calls
+  //                        work without it
+  //   FACILITATOR_API_KEY  only if the facilitator requires one
 }

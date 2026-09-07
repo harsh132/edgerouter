@@ -29,13 +29,15 @@ function die(message: string): never {
 
 if (!ACCOUNT) die('set HEDERA_ACCOUNT_ID to the payer account');
 if (!KEY) die('set HEDERA_PRIVATE_KEY in the environment — never as an argument');
-if (!CAPABILITY) die('set EDGEROUTER_TOKEN — run: bun apps/gate/mint-token.ts');
+// Deliberately not required: the gate is permissionless, and running this
+// without a token is the more important case to be able to test.
+
 
 const paidCalls: Paid[] = [];
 const adapter = new EdgerouterAdapter({
   connection: () => ({
     baseURL: BASE,
-    capability: CAPABILITY,
+    capability: CAPABILITY ?? '',
     maxAmount: BigInt(process.env.MAX_TINYBARS ?? '100000000'),
     network: 'hedera:testnet',
     defaultContextWindow: 128_000,
@@ -46,6 +48,7 @@ const adapter = new EdgerouterAdapter({
 
 console.log(`\n  gate      ${BASE}`);
 console.log(`  payer     ${ACCOUNT}`);
+console.log(`  capability ${CAPABILITY ? 'presented' : 'none — anonymous'}`);
 
 const models = await adapter.listModels('edgerouter');
 console.log(`  catalog   ${models.length} models from the gate\n`);

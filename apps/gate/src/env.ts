@@ -32,18 +32,6 @@ export type Env = {
   /** Upstream inference. Any OpenAI-compatible endpoint. */
   OPENROUTER_API_KEY?: string;
   UPSTREAM_URL?: string;
-
-  /**
-   * Unsettled-debt ledger.
-   *
-   * The only state the gate keeps, and it is deliberately the kind that can be
-   * lost without harm: losing it forgets who owes what, which costs the
-   * operator money but never wrongly refuses a paying user. KV's eventual
-   * consistency is acceptable for the same reason — a debtor slipping through
-   * for a few seconds after a write is a bounded loss, and the alternative is
-   * a strongly consistent store in the hot path of every request.
-   */
-  DEBT?: KVNamespace;
 };
 
 const encoder = new TextEncoder();

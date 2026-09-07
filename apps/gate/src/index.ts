@@ -1,18 +1,25 @@
 /**
  * The gate. A stateless Cloudflare Worker.
  *
- *   verify the capability  →  price the request  →  check the policy
- *   →  402 or accept payment  →  proxy upstream  →  settle
+ *   price the request  →  402 or accept payment  →  settle  →  proxy upstream
+ *
+ * Permissionless. There is no signup, no account, and no key to be issued:
+ * anyone who can pay is served, which is the whole point of doing this over
+ * x402 rather than over an API key. A capability token may be presented and
+ * then narrows what the request may do, but its absence is not an error.
+ *
+ * Settlement happens BEFORE the upstream call. That ordering is what makes
+ * anonymity affordable: nothing is spent on a caller's behalf until their money
+ * has actually moved, so there is no credit to extend and therefore no identity
+ * to check. It costs nothing in latency, because settlement was always inside
+ * the critical path — this only changes what it is sequenced against.
  *
  * No database, no session, no account. Everything needed to decide arrives in
- * the request: the capability is a signature chain the Worker recomputes from a
- * derived root key, and the payment is verified by a facilitator. Nothing is
- * remembered between requests, which is the property that lets this run at the
- * edge and the reason there is nothing here to breach.
+ * the request, and nothing is remembered between requests — the property that
+ * lets this run at the edge and the reason there is nothing here to breach.
  *
- * The route is OpenAI-compatible on purpose. An existing client points its base
- * URL here and passes its capability token where an API key would go, so
- * nothing in the caller has to know this protocol exists.
+ * The route is OpenAI-compatible on purpose, so an existing client points its
+ * base URL here and nothing in the caller has to know this protocol exists.
  */
 import { permits, policyOf } from '../../../packages/core/src/caveat';
 import { deserialize, verify, type Token } from '../../../packages/core/src/token';
@@ -28,7 +35,6 @@ import {
 } from './x402';
 import { priceFor, MODELS } from './pricing';
 import { deriveRootKey, type Env } from './env';
-import { DEFAULT_POLICY, payerOf, recordFailure, recordSuccess, standing } from './ledger';
 import { parseNetworks, selectNetwork } from './networks';
 
 const json = (body: unknown, status = 200, headers: HeadersInit = {}): Response =>
@@ -115,18 +121,40 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
   if (!env.FACILITATOR_URL) {
     return refuse('unconfigured', 'no facilitator configured; paid routes are closed', 503);
   }
-  if (!env.SERVICE_SECRET) {
-    return refuse('unconfigured', 'no service secret configured', 503);
-  }
 
+  /*
+    Optional, and the distinction between "absent" and "invalid" is the whole
+    of the access model.
+
+    Absent means anonymous: the caller gets the default policy and pays like
+    anyone else. Present but unverifiable is an error, not a downgrade —
+    silently serving a request whose capability failed verification would mean a
+    tampered token buys exactly what no token buys, and nobody would ever learn
+    their delegation had stopped working.
+  */
+  const bearer = request.headers.get('authorization');
   const token = capabilityFrom(request);
-  if (!token) {
-    return refuse('no_capability', 'send a capability as Authorization: Bearer er_<token>', 401);
+  if (bearer && !token) {
+    return refuse('bad_capability', 'the Authorization header is not a readable capability', 401);
   }
-
-  const verified = await verify(await deriveRootKey(env.SERVICE_SECRET, token.root), token.root, token);
-  if (!verified.ok) {
-    return refuse('bad_capability', `capability failed verification (${verified.reason})`, 401);
+  if (token) {
+    /*
+      Only capabilities need the secret, so it is checked here rather than at
+      the top. A gate with no service secret still serves anonymous paid
+      requests perfectly well — it simply cannot verify a delegation, and
+      saying so beats refusing everyone.
+    */
+    if (!env.SERVICE_SECRET) {
+      return refuse('unconfigured', 'this gate cannot verify capabilities; omit yours to pay directly', 503);
+    }
+    const verified = await verify(
+      await deriveRootKey(env.SERVICE_SECRET, token.root),
+      token.root,
+      token,
+    );
+    if (!verified.ok) {
+      return refuse('bad_capability', `capability failed verification (${verified.reason})`, 401);
+    }
   }
 
   let body: { model?: unknown };
@@ -147,14 +175,16 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
     pay for something we were always going to refuse would need a refund path,
     and a refund path is state.
   */
-  const host = new URL(request.url).host;
-  const decision = permits(policyOf(token.caveats), {
-    amountMinor: price,
-    host,
-    now: Date.now(),
-  });
-  if (!decision.ok) {
-    return refuse(`policy_${decision.rule}`, decision.detail, 403);
+  if (token) {
+    const host = new URL(request.url).host;
+    const decision = permits(policyOf(token.caveats), {
+      amountMinor: price,
+      host,
+      now: Date.now(),
+    });
+    if (!decision.ok) {
+      return refuse(`policy_${decision.rule}`, decision.detail, 403);
+    }
   }
 
   /*
@@ -188,36 +218,6 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
   if (!payment) return paymentRequiredResponse(reqs);
 
   /*
-    Debt is checked here — after a payment has been offered, before anything is
-    spent on this caller's behalf. Checking it earlier would refuse a quote to
-    someone who has not yet had a chance to settle; checking it later would mean
-    the upstream call is already paid for.
-  */
-  /*
-    Telemetry, not a control. Recorded because knowing the unsettled rate is how
-    a facilitator problem gets noticed, but it defends nothing: both a payer
-    address and a capability can be rotated for the price of a signature, so a
-    determined caller simply arrives as somebody new. The actual defence is
-    escrow — see the batch-settlement note in docs/PROJECTS.md.
-
-    On Hedera the payer is inside a serialized transaction we do not decode, so
-    only the capability axis is recorded there.
-  */
-  const payer = network.kind === 'evm' ? payerOf(payment.payload) : null;
-  const ids = { payer, capability: token.node };
-
-  if (env.DEBT) {
-    const good = await standing(env.DEBT, DEFAULT_POLICY, ids);
-    if (!good.ok) {
-      return refuse(
-        'unsettled_debt',
-        `earlier calls were served but never settled (${good.debt.failures} failures, ${good.debt.owedMinor} owed)`,
-        402,
-      );
-    }
-  }
-
-  /*
     Checked before the facilitator sees it. A facilitator verifies that a
     signature is valid for the terms inside the payload — not that those terms
     are the ones we quoted. Without this, a correctly signed payment for one
@@ -243,39 +243,69 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
   timing.verifyMs = Date.now() - verifyStarted;
   if (!checked.ok) return refuse('payment_invalid', checked.reason, 402);
 
-  const upstreamStarted = Date.now();
-  const upstream = await callUpstream(request, env);
-  timing.upstreamMs = Date.now() - upstreamStarted;
-  if (!upstream.ok) {
-    // Nothing was settled, so nothing is owed. Verify-before, settle-after
-    // means an upstream failure costs the operator a call and the user nothing.
-    return refuse('upstream_failed', upstream.reason, 502);
-  }
+  /*
+    Settled before the upstream call, and this is the ordering the whole access
+    model rests on.
 
+    Settling afterwards would mean serving first and hoping the money lands —
+    extending credit. Credit needs an identity to extend it to, an identity has
+    to be worth something to be worth checking, and the only identity in this
+    request that cannot be minted for free is a capability we issue. Requiring
+    one is exactly the signup this service exists to not have. So: no credit,
+    no identity, no signup.
+
+    It is not slower. Settlement was always inside the critical path before the
+    response; this changes what it is sequenced against, not how much of it
+    there is.
+
+    The cost is real but small and lands on the right party: if the upstream
+    fails after settlement, the caller has paid for an answer they did not get.
+    That is one call, at a price they agreed to, and it is disclosed below —
+    against an unbounded loss to anyone willing to make wallets faster than we
+    can refuse them.
+  */
   const settleStarted = Date.now();
   const settled = await settlePayment(facilitator, payment, reqs);
   timing.settleMs = Date.now() - settleStarted;
-  console.log(
-    `x402 ${network.id} verify=${timing.verifyMs}ms upstream=${timing.upstreamMs}ms settle=${timing.settleMs}ms`,
-  );
   if (!settled.ok) {
+    // Nothing has been spent on this caller's behalf, so a failed settlement
+    // costs nobody anything. It is simply not a paid request.
+    console.error('settlement failed before the upstream call', settled.reason);
+    return refuse('payment_unsettled', `payment did not settle: ${settled.reason}`, 402);
+  }
+
+  const upstreamStarted = Date.now();
+  const upstream = await callUpstream(request, env);
+  timing.upstreamMs = Date.now() - upstreamStarted;
+  console.log(
+    `x402 ${network.id} verify=${timing.verifyMs}ms settle=${timing.settleMs}ms upstream=${timing.upstreamMs}ms`,
+  );
+
+  if (!upstream.ok) {
     /*
-      The answer exists and the payer authorised the charge; settlement failed
-      afterwards. It is served anyway — withholding a paid-for answer because
-      our accounting had a bad minute is the wrong way round — but the loss is
-      recorded so the same caller cannot repeat it indefinitely.
+      Paid for, and undeliverable. Reported with the settlement attached rather
+      than as a bare 502, so the caller can see what they were charged and
+      prove it — the only remedy a stateless service can offer is an honest
+      receipt.
     */
-    console.error('settlement failed after successful upstream call', settled.reason);
-    if (env.DEBT) await recordFailure(env.DEBT, DEFAULT_POLICY, ids, price);
-  } else if (env.DEBT) {
-    await recordSuccess(env.DEBT, DEFAULT_POLICY, ids);
+    console.error('upstream failed after settlement', upstream.reason);
+    return json(
+      {
+        error: {
+          code: 'upstream_failed_after_payment',
+          detail: `payment settled but the upstream call failed: ${upstream.reason}`,
+        },
+      },
+      502,
+      { [HEADER.response]: base64(JSON.stringify(settled.body)) },
+    );
   }
 
   return new Response(upstream.body, {
     status: 200,
     headers: {
       'content-type': upstream.contentType,
-      [HEADER.response]: base64(JSON.stringify(settled.ok ? settled.body : { settled: false })),
+      [HEADER.response]: base64(JSON.stringify(settled.body)),
     },
   });
 };

@@ -145,7 +145,17 @@ export class EdgerouterAdapter extends LlmAdapter {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            authorization: `Bearer ${connection.capability}`,
+            /*
+              Omitted entirely when there is no capability, rather than sent
+              empty. The gate is permissionless — no header means anonymous and
+              is quoted a price like anyone else — but a present-and-unreadable
+              header is a tampered capability and refused. `Bearer ` with
+              nothing after it is the second of those, so sending one would turn
+              "I have no token" into "my token is broken".
+            */
+            ...(connection.capability
+              ? { authorization: `Bearer ${connection.capability}` }
+              : {}),
             ...attributionHeaders(),
           },
           body,
