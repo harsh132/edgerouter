@@ -36,6 +36,20 @@ dsh plugin add dsh-plugin-edgerouter
 
 Restart Desktop afterwards so the new bundle enters the Loader composition.
 
+### From this repository
+
+```sh
+npm run pack --prefix packages/dsh
+dsh plugin --profile desktop add "<repo>/packages/dsh/dsh-plugin-edgerouter.tgz"
+```
+
+The tarball has a stable name on purpose. A profile pins the plugin by absolute
+path, so a version-stamped filename leaves that pin dangling on the next bump —
+and pnpm then refuses to do anything in that profile at all, including
+installing the replacement. One name keeps the pin valid; the version inside
+still changes, which is what makes pnpm re-extract rather than replay its
+cache.
+
 ## Setup
 
 There isn't one. On first run the plugin generates a wallet and logs an address:

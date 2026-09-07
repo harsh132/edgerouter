@@ -28,7 +28,8 @@
     "llm"
   ],
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "pack": "node pack.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
