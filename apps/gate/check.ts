@@ -48,6 +48,7 @@ const EVM: NetworkConfig = {
   payTo: '0x209693Bc6afc0C5328bA36FaF03C514EF312287C',
   assetName: 'USDC',
   assetVersion: '2',
+  unitsPerUsdMinor: 1n,
   maxTimeoutSeconds: 60,
 };
 
@@ -57,6 +58,7 @@ const HEDERA: NetworkConfig = {
   asset: '0.0.456858',
   payTo: '0.0.1234',
   feePayer: '0.0.1235',
+  unitsPerUsdMinor: 1n,
   maxTimeoutSeconds: 180,
 };
 
@@ -274,14 +276,19 @@ check(!sameIdentifier('hedera', '0.0.1234', '0.0.12340'), 'a different Hedera id
 
 console.log('\nNetwork configuration\n');
 
-const configured = parseNetworks(JSON.stringify([EVM, HEDERA]));
+// `unitsPerUsdMinor` is a bigint in the config type and a string on the wire —
+// which is the point of it being a string on the wire.
+const asWire = (value: unknown) =>
+  JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v));
+
+const configured = parseNetworks(asWire([EVM, HEDERA]));
 check(configured.size === 2, 'both networks load from config');
 check(parseNetworks('not json').size === 0, 'malformed config loads nothing rather than throwing');
-check(parseNetworks(JSON.stringify([{ ...HEDERA, feePayer: undefined }])).size === 0,
+check(parseNetworks(asWire([{ ...HEDERA, feePayer: undefined }])).size === 0,
   'a Hedera network with no feePayer is dropped');
-check(parseNetworks(JSON.stringify([{ ...EVM, payTo: 'not-an-address' }])).size === 0,
+check(parseNetworks(asWire([{ ...EVM, payTo: 'not-an-address' }])).size === 0,
   'an EVM network with a malformed payTo is dropped');
-check(parseNetworks(JSON.stringify([{ ...EVM, id: 'hedera:testnet' }])).size === 0,
+check(parseNetworks(asWire([{ ...EVM, id: 'hedera:testnet' }])).size === 0,
   'an EVM entry claiming a hedera id is dropped');
 
 const byQuery = selectNetwork(
@@ -319,6 +326,81 @@ console.log('\nPricing\n');
 check(priceFor('deepseek/deepseek-chat') === 1_000n, 'a known model has a price');
 check(priceFor('not/a-model') === null, 'an unknown model has no default price');
 check(MODELS.every((m) => m.minorPerCall > 0n), 'every listed model costs something');
+
+/* ------------------------------------------------------------------- pricing units */
+
+console.log('\nPricing units\n');
+
+check(
+  requirements({ request: REQUEST, amountMinor: 1_000n, description: 'd', network: EVM })
+    .accepts[0]!.amount === '1000',
+  'a six-decimal stablecoin quotes the price unchanged',
+);
+
+const HBAR_NETWORK: NetworkConfig = {
+  kind: 'hedera',
+  id: 'hedera:testnet',
+  asset: '0.0.0',
+  payTo: '0.0.1234',
+  feePayer: '0.0.1235',
+  // 1e8 tinybars per HBAR at $0.20 => 500 tinybars per USD minor unit.
+  unitsPerUsdMinor: 500n,
+  maxTimeoutSeconds: 180,
+};
+
+check(
+  requirements({ request: REQUEST, amountMinor: 1_000n, description: 'd', network: HBAR_NETWORK })
+    .accepts[0]!.amount === '500000',
+  'an HBAR quote is scaled into tinybars, not passed through as dollars',
+);
+
+const hbarNoScale = parseNetworks(
+  JSON.stringify([
+    {
+      kind: 'hedera',
+      id: 'hedera:testnet',
+      asset: '0.0.0',
+      payTo: '0.0.1234',
+      feePayer: '0.0.1235',
+    },
+  ]),
+);
+check(
+  hbarNoScale.size === 0,
+  'an HBAR network with no unitsPerUsdMinor is dropped rather than quoted 1000x cheap',
+);
+
+const htsNoScale = parseNetworks(
+  JSON.stringify([
+    {
+      kind: 'hedera',
+      id: 'hedera:testnet',
+      asset: '0.0.429274',
+      payTo: '0.0.1234',
+      feePayer: '0.0.1235',
+    },
+  ]),
+);
+check(
+  htsNoScale.get('hedera:testnet')?.unitsPerUsdMinor === 1n,
+  'an HTS token defaults to a six-decimal stablecoin',
+);
+
+for (const bad of ['0', '-5', 'many', '1.5']) {
+  const parsed = parseNetworks(
+    JSON.stringify([
+      {
+        kind: 'hedera',
+        id: 'hedera:testnet',
+        asset: '0.0.0',
+        payTo: '0.0.1234',
+        feePayer: '0.0.1235',
+        unitsPerUsdMinor: bad,
+      },
+    ]),
+  );
+  check(parsed.size === 0, `unitsPerUsdMinor of "${bad}" is refused`);
+}
 
 console.log(failures === 0 ? '\nAll checks pass.' : `\n${failures} FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

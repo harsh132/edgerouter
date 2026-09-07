@@ -11,6 +11,15 @@
  *            partially-signed TransferTransaction, and `extra.feePayer` is
  *            mandatory rather than optional
  *
+ * They also price differently, which is the subtler trap. The price table is in
+ * USD minor units — millionths of a dollar — because that is the only unit a
+ * model price is meaningfully quoted in. USDC happens to have six decimals, so
+ * on a USDC network the two coincide and no conversion is visible. HBAR has
+ * eight decimals and its own exchange rate, so quoting a USD price directly as
+ * tinybars charges about a thousandth of the intended amount and settles
+ * perfectly while doing it. Every network therefore declares
+ * `unitsPerUsdMinor`, and a network paid in HBAR must declare it explicitly.
+ *
  * So the config is a discriminated union and every place that formats or reads
  * a payment branches on `kind`. There is deliberately no "generic" path that
  * papers over the difference — that path would silently produce EVM-shaped
@@ -36,6 +45,8 @@ export type NetworkConfig =
       /** EIP-712 domain, required for EIP-3009. */
       assetName: string;
       assetVersion: string;
+      /** Smallest asset units per USD minor unit. 1 for a six-decimal stablecoin. */
+      unitsPerUsdMinor: bigint;
       maxTimeoutSeconds: number;
     }
   | {
@@ -54,6 +65,15 @@ export type NetworkConfig =
        * who never agreed to them.
        */
       feePayer: string;
+      /**
+       * Smallest asset units per USD minor unit.
+       *
+       * For an HTS stablecoin with six decimals this is 1. For HBAR it is a
+       * rate — 1e8 tinybars per HBAR divided by the HBAR price in USD minor —
+       * and it is a fixed number here rather than an oracle read, which is a
+       * stated limitation: the quote drifts as the price moves.
+       */
+      unitsPerUsdMinor: bigint;
       maxTimeoutSeconds: number;
     };
 
@@ -106,14 +126,45 @@ const narrow = (entry: unknown): NetworkConfig | null => {
 
   const timeout = typeof e.maxTimeoutSeconds === 'number' ? e.maxTimeoutSeconds : null;
 
+  /*
+    Accepted as a string so a large rate survives JSON, and refused rather than
+    defaulted when it is not a positive integer — a zero or negative scale would
+    quote a free or nonsensical price.
+  */
+  let scale: bigint | null = null;
+  if (e.unitsPerUsdMinor !== undefined) {
+    const raw = typeof e.unitsPerUsdMinor === 'number'
+      ? String(e.unitsPerUsdMinor)
+      : str(e.unitsPerUsdMinor);
+    if (!raw || !/^\d+$/.test(raw)) return null;
+    scale = BigInt(raw);
+    if (scale <= 0n) return null;
+  }
+
   if (e.kind === 'hedera') {
     const feePayer = str(e.feePayer);
     if (!feePayer) return null;
     if (!/^hedera:(mainnet|testnet|previewnet)$/.test(id)) return null;
     if (!isEntityId(asset) || !isEntityId(payTo) || !isEntityId(feePayer)) return null;
+    /*
+      HBAR is not a dollar. A network paid in HBAR must say what a dollar is
+      worth in tinybars; defaulting to 1 would quote a thousandth of the price
+      and settle cleanly, which is the worst way for a pricing bug to behave.
+      An HTS token is assumed to be a six-decimal stablecoin unless told
+      otherwise, matching the EVM case.
+    */
+    if (isHbarAsset(asset) && scale === null) return null;
     // Hedera consensus is slower than a Base block; the spec's own example uses
     // 180 rather than the 60 an EVM quote gets.
-    return { kind: 'hedera', id, asset, payTo, feePayer, maxTimeoutSeconds: timeout ?? 180 };
+    return {
+      kind: 'hedera',
+      id,
+      asset,
+      payTo,
+      feePayer,
+      unitsPerUsdMinor: scale ?? 1n,
+      maxTimeoutSeconds: timeout ?? 180,
+    };
   }
 
   if (e.kind === 'evm') {
@@ -126,6 +177,7 @@ const narrow = (entry: unknown): NetworkConfig | null => {
       payTo,
       assetName: str(e.assetName) ?? 'USDC',
       assetVersion: str(e.assetVersion) ?? '2',
+      unitsPerUsdMinor: scale ?? 1n,
       maxTimeoutSeconds: timeout ?? 60,
     };
   }
@@ -133,6 +185,8 @@ const narrow = (entry: unknown): NetworkConfig | null => {
   return null;
 };
 
+/** `0.0.0` is x402's identifier for native HBAR, not an HTS token. */
+export const isHbarAsset = (value: string): boolean => value === '0.0.0';
 export const isEntityId = (value: string): boolean => /^\d+\.\d+\.\d+$/.test(value);
 export const isEvmAddress = (value: string): boolean => /^0x[0-9a-fA-F]{40}$/.test(value);
 

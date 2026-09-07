@@ -110,14 +110,23 @@ export const quoteOf = (required: PaymentRequired): PaymentRequirements => requi
  */
 export const requirements = (params: {
   request: Request;
+  /** The price in USD minor units. Converted to the asset's units below. */
   amountMinor: bigint;
   description: string;
   network: NetworkConfig;
 }): PaymentRequired => {
+  /*
+    The one conversion in the gate. Prices are quoted in USD minor units, but a
+    payment is denominated in the asset — the same number means a thousandth of
+    the price in tinybars as it does in USDC. Done here, once, so no caller has
+    to remember which unit it is holding.
+  */
+  const amount = params.amountMinor * params.network.unitsPerUsdMinor;
+
   const common = {
     scheme: 'exact' as const,
     network: params.network.id,
-    amount: params.amountMinor.toString(),
+    amount: amount.toString(),
     asset: params.network.asset,
     payTo: params.network.payTo,
     maxTimeoutSeconds: params.network.maxTimeoutSeconds,

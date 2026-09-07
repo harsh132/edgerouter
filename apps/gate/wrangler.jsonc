@@ -18,7 +18,15 @@
     // Amounts on Hedera are tinybars, 10^8 per HBAR.
     //
     // feePayer is the facilitator's own sponsoring account, not ours to choose.
-    "NETWORKS": "[{\"kind\":\"evm\",\"id\":\"eip155:80002\",\"asset\":\"0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582\",\"payTo\":\"0x0000000000000000000000000000000000000000\",\"assetName\":\"USDC\",\"assetVersion\":\"2\"},{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.10400448\",\"feePayer\":\"0.0.7162784\"}]",
+    //
+    // unitsPerUsdMinor converts a USD price into the asset's own smallest unit.
+    // USDC has six decimals, so on an EVM USDC network it is 1. HBAR has eight
+    // decimals and a price: the network's own exchange rate (mirror node
+    // /api/v1/network/exchangerate) put 1 HBAR at $0.081, so one USD minor unit
+    // is ~1234 tinybars. It is a fixed number rather than an oracle read, which
+    // means the quote drifts as the price moves — acceptable on testnet, not on
+    // mainnet.
+    "NETWORKS": "[{\"kind\":\"evm\",\"id\":\"eip155:80002\",\"asset\":\"0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582\",\"payTo\":\"0x0000000000000000000000000000000000000000\",\"assetName\":\"USDC\",\"assetVersion\":\"2\",\"unitsPerUsdMinor\":\"1\"},{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.10400448\",\"feePayer\":\"0.0.7162784\",\"unitsPerUsdMinor\":\"1234\"}]",
     "DEFAULT_NETWORK": "hedera:testnet"
   },
   // The only state the gate keeps: who was served but never settled. Losing it
