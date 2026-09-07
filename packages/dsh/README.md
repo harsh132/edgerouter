@@ -46,7 +46,8 @@ llm-edgerouter: send hbar to 0xf2829e87d7be67965af5fa99870917918da23b47 to start
 
 Send hbar to that address from any wallet, exchange, or the
 [testnet faucet](https://portal.hedera.com/faucet). The plugin notices within
-twenty seconds and starts paying.
+twenty seconds and starts paying. On an EVM chain it is the same flow with USDC
+and [Circle's faucet](https://faucet.circle.com).
 
 **The address is not an account yet, and that is fine.** Hedera creates the
 account on the first transfer to it (auto account creation, HIP-32/HIP-542), so
@@ -93,6 +94,26 @@ llm-edgerouter:
 `maxAmount` is a per-call ceiling, not a budget. The plugin refuses to sign
 anything above it, so a gate that quotes a surprising price gets a refusal
 rather than your money.
+
+### Chains
+
+Two, and the wallet you get depends on which you pick:
+
+| network | asset | fund it with |
+|---|---|---|
+| `hedera:testnet` | HBAR | hbar, to the address shown |
+| `eip155:84532` | USDC on Base Sepolia | USDC, to the address shown |
+
+`maxAmount` is in the asset's smallest unit either way — tinybars (10⁸ per ℏ) on
+Hedera, six decimals on USDC. `'100000000'` is 1 ℏ; on Base Sepolia it would be
+100 USDC, which is almost certainly not what you meant.
+
+On EVM chains there is an asymmetry worth knowing before you fund one:
+
+> **Paying costs no gas. Leaving does.** EIP-3009 is an authorization the
+> facilitator submits and pays for, so a wallet holding only USDC can spend
+> indefinitely — and then cannot withdraw, because an ERC-20 transfer needs the
+> chain's own token. Send a little native ETH too if you plan to sweep.
 
 ### Other places the money can come from
 
@@ -178,8 +199,8 @@ paid 0.01234 ℏ (total 0.03702 ℏ over 3) for deepseek/deepseek-chat
   request that fails and says why.
 - **Not streaming.** The gate buffers its upstream before answering, so there is
   no incremental data to forward. The answer arrives whole.
-- **Testnet.** Hedera testnet today. The settlement path is real; the money is
-  not.
+- **Testnets.** Hedera testnet and Base Sepolia. The settlement path is real —
+  signed, submitted, confirmed on chain — and the money is not.
 
 ## Licence
 

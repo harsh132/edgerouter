@@ -38,9 +38,14 @@ import type {} from '@deepseek-ai/dsh-settings';
 import {
   connectAuthority,
   describe,
+  evmSigner,
   formatHbar,
+  formatUsdc,
   hederaSigner,
+  isEvmNetwork,
+  loadOrCreateEvmWallet,
   loadOrCreateWallet,
+  type EvmWallet,
   type LocalWallet,
   type PaymentSigner,
 } from '../../sdk/src/index';
@@ -195,6 +200,7 @@ export function apply(ctx: Context, config: Config): void {
   let signer: PaymentSigner | undefined;
   let unavailable = 'the payment source has not finished starting up';
   let wallet: LocalWallet | undefined;
+  let evmWallet: EvmWallet | undefined;
   let source: WalletSource | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -240,6 +246,40 @@ export function apply(ctx: Context, config: Config): void {
   };
 
   /**
+   * The same, for an EVM chain.
+   *
+   * Separate because the state it reports is different, not because the code
+   * would not compress. There is no "account does not exist yet" here — an EVM
+   * address always exists — so the only question is whether anyone has sent it
+   * the token the gate quotes, and the message says exactly that.
+   */
+  const checkEvmFunding = async (announce: boolean): Promise<void> => {
+    if (!evmWallet) return;
+    try {
+      const funding = await evmWallet.refresh();
+      if (!funding.canPay) {
+        signer = undefined;
+        unavailable = `this wallet holds no USDC yet — send some to ${evmWallet.address}`;
+        if (announce) {
+          ctx.logger.info(`llm-edgerouter: send USDC to ${evmWallet.address} to start paying`);
+        }
+        return;
+      }
+      const first = signer === undefined;
+      signer = evmWallet.signer();
+      if (first) {
+        ctx.logger.info(
+          `llm-edgerouter: funded — ${evmWallet.address} holds ${formatUsdc(funding.tokenMinor)}`,
+        );
+      }
+      clearPolling();
+    } catch (error) {
+      unavailable = `could not read the wallet's balance: ${(error as Error).message}`;
+      if (announce) ctx.logger.warn(`llm-edgerouter: ${unavailable}`);
+    }
+  };
+
+  /**
    * Builds the payment source named by the settings.
    *
    * Asynchronous and fire-and-forget, because `apply` must return promptly —
@@ -254,18 +294,32 @@ export function apply(ctx: Context, config: Config): void {
     source = now.wallet ?? 'local';
     signer = undefined;
     wallet = undefined;
+    evmWallet = undefined;
     clearPolling();
 
     try {
       if (source === 'environment') {
         const accountId = now.accountId ?? process.env[DEFAULT_ACCOUNT_ENV];
         const privateKey = process.env[now.privateKeyEnv ?? DEFAULT_KEY_ENV];
-        if (!accountId || !privateKey) {
+        // An EVM address is derived from its key, so only Hedera needs to be
+        // told which account it is paying from.
+        if ((!accountId && !isEvmNetwork(network)) || !privateKey) {
           unavailable = `wallet is set to "environment" but ${DEFAULT_ACCOUNT_ENV} or ${now.privateKeyEnv ?? DEFAULT_KEY_ENV} is not set`;
           return;
         }
-        signer = hederaSigner({ accountId, privateKey, network });
-        ctx.logger.info(`llm-edgerouter: paying from ${accountId} on ${network}`);
+        if (isEvmNetwork(network)) {
+          signer = evmSigner({ privateKey, network });
+        } else {
+          // Narrowed rather than asserted: the guard above only requires an
+          // account id on the Hedera branch, and the compiler is right that the
+          // two facts are not connected by anything it can see.
+          if (!accountId) {
+            unavailable = `wallet is set to "environment" but ${DEFAULT_ACCOUNT_ENV} is not set`;
+            return;
+          }
+          signer = hederaSigner({ accountId, privateKey, network });
+        }
+        ctx.logger.info(`llm-edgerouter: paying from ${signer.accountId} on ${network}`);
         return;
       }
 
@@ -285,6 +339,17 @@ export function apply(ctx: Context, config: Config): void {
         ctx.logger.info(
           `llm-edgerouter: spending the "${connected.node}" allowance, paid from ${connected.account}`,
         );
+        return;
+      }
+
+      if (isEvmNetwork(network)) {
+        const handle = loadOrCreateEvmWallet({ network });
+        evmWallet = handle.wallet;
+        if (handle.created) {
+          ctx.logger.info(`llm-edgerouter: generated a wallet — ${describe(handle.path)}`);
+        }
+        await checkEvmFunding(true);
+        if (!signer) timer = setInterval(() => void checkEvmFunding(false), FUNDING_POLL_MS);
         return;
       }
 

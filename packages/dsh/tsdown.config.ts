@@ -30,5 +30,7 @@ export default defineConfig({
     '@deepseek-ai/dsh-llm',
     '@deepseek-ai/schemastery',
     '@x402/hedera',
+    '@x402/evm',
+    'viem',
   ],
 });
