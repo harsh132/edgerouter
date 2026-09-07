@@ -155,11 +155,7 @@ check(toUsage(undefined) === null, 'a response with no usage reports none');
   })!;
   check(usage.inputTokens === 60, 'cached tokens are subtracted out of the input count');
   check(usage.cacheReadTokens === 40, 'cached tokens are reported separately');
-  // `totalTokens` is in the harness's main-branch TokenUsage but not in the rc
-  // we build against, so it is emitted for forward-compatibility and read here
-  // through a cast rather than dropped and re-added later.
-  const forward = usage as typeof usage & { totalTokens?: number };
-  check(usage.outputTokens === 20 && forward.totalTokens === 120, 'output and total carry over');
+  check(usage.outputTokens === 20 && usage.totalTokens === 120, 'output and total carry over');
 }
 
 check(toFinishReason('tool_calls').kind === 'tool-calls', 'tool_calls maps to tool-calls');

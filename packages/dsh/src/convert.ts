@@ -14,7 +14,7 @@
  *   - block `index`es are allocated in first-seen order and reused for every
  *     delta of the same block.
  */
-import { CallId, LlmError } from '@deepseek-ai/dsh-llm';
+import { ToolCallId, LlmError } from '@deepseek-ai/dsh-llm';
 import type {
   ContentBlock,
   FinishReason,
@@ -48,7 +48,14 @@ export type OpenAiRequest = {
   stop?: string[];
 };
 
-/** Block types this adapter can put on the wire. Anything else is refused. */
+/**
+ * Block types this adapter can put on the wire.
+ *
+ * A set rather than a union check because the vocabulary is merge-extensible:
+ * the harness declares `image` and `file` today and plugins may add more, so
+ * anything absent here is refused by name instead of matched against a list
+ * that would need editing every time the harness grows one.
+ */
 const HANDLED = new Set<string>(['text', 'reasoning', 'tool-call', 'tool-result']);
 
 /** Text of every block that renders as text, in order. */
@@ -83,10 +90,10 @@ export const convertMessage = (message: Message): OpenAiMessage[] => {
 
   /*
     Anything this adapter does not understand is refused rather than silently
-    dropped. The block vocabulary is merge-extensible — the harness adds types
-    (images and files exist on its main branch already) — and dropping one
-    produces a model answering confidently about something it never saw, which
-    is worse than a request that fails naming the reason.
+    dropped. Images and files exist in this harness version, and this provider
+    is text-only: dropping one produces a model answering confidently about
+    something it never saw, which is worse than a request that fails naming
+    the reason.
   */
   const unsupported = message.content.find((block) => !HANDLED.has(block.type));
   if (unsupported) {
@@ -219,7 +226,7 @@ export const toChunks = function* (response: OpenAiResponse): Generator<StreamCh
   }
 
   for (const call of message?.tool_calls ?? []) {
-    const id = CallId(call.id);
+    const id = ToolCallId(call.id);
     const args = call.function?.arguments ?? '';
     yield { type: 'block-start', index, blockType: 'tool-call' };
     yield {
