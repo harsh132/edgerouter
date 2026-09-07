@@ -8,12 +8,18 @@
   "vars": {
     // Verified live against https://api.testnet.blocky402.com/supported.
     //
-    // Hedera only, for now. Blocky402 also settles Polygon Amoy (eip155:80002),
-    // and an entry for it lived here until deployment — but its payTo was still
-    // the zero address, so anyone who chose that network would have burned
-    // their payment. A network we cannot receive on is worse than one we do not
-    // offer: the client signs successfully, the facilitator settles
-    // successfully, and the money is gone. Restore it with a real address.
+    // Two networks, and the reason Amoy was absent until now is worth keeping:
+    // its payTo was the zero address, so anyone choosing that network would
+    // have burned their payment. A network we cannot receive on is worse than
+    // one we do not offer — the client signs successfully, the facilitator
+    // settles successfully, and the money is gone. It is back because there is
+    // now a real address behind it.
+    //
+    // The Amoy asset is Circle's testnet USDC. Its EIP-712 domain is read from
+    // the contract rather than assumed: name() returns "USDC" (not "USD Coin",
+    // which several other deployments use) and version() returns "2". A wrong
+    // domain produces a signature that verifies against nothing, and the error
+    // surfaces at the facilitator looking like a malformed payment.
     //
     // Hedera uses HBAR (0.0.0) rather than an HTS token, because HTS transfers
     // additionally require the payer's account to be *associated* with the
@@ -29,7 +35,7 @@
     // is ~1234 tinybars. It is a fixed number rather than an oracle read, which
     // means the quote drifts as the price moves — acceptable on testnet, not on
     // mainnet.
-    "NETWORKS": "[{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.10400448\",\"feePayer\":\"0.0.7162784\",\"unitsPerUsdMinor\":\"1234\"}]",
+    "NETWORKS": "[{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.10400448\",\"feePayer\":\"0.0.7162784\",\"unitsPerUsdMinor\":\"1234\"},{\"kind\":\"evm\",\"id\":\"eip155:80002\",\"asset\":\"0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582\",\"payTo\":\"0x3f870ECEEE0EcE3a54254C1D364230ABd14aa2d3\",\"assetName\":\"USDC\",\"assetVersion\":\"2\",\"unitsPerUsdMinor\":\"1\"}]",
     "DEFAULT_NETWORK": "hedera:testnet",
     // Public, so it is a var rather than a secret. Which facilitator settles
     // our payments is not a thing to hide, and hiding it would mean nobody can

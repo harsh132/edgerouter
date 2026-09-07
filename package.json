@@ -7,7 +7,7 @@
     "apps/*"
   ],
   "scripts": {
-    "check": "bun packages/core/check.ts && bun packages/sdk/check.ts && bun packages/sdk/wallet-check.ts && bun packages/sdk/delegate-check.ts && bun packages/dsh/check.ts && bun apps/gate/check.ts",
+    "check": "bun packages/core/check.ts && bun packages/sdk/check.ts && bun packages/sdk/wallet-check.ts && bun packages/sdk/delegate-check.ts && bun packages/dsh/check.ts && bun apps/gate/check.ts && bun apps/gate/config-check.ts",
     "smoke": "bun apps/gate/smoke.ts",
     "dev": "wrangler dev --config apps/gate/wrangler.jsonc",
     "typecheck": "tsc --noEmit",
