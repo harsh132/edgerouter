@@ -106,3 +106,40 @@ capabilities, and caught a live mismatch on its first run: the gate defaulted to
 Base Sepolia, which Blocky402 does not settle. A gate can quote a network
 perfectly and still be unsettleable — that failure is invisible until a real
 payment arrives, by which point a user has signed something nobody can settle.
+
+## Measured, 2026-09-07
+
+The argument above was made without numbers. Here are some.
+
+Four paid round trips on `hedera:testnet` through Blocky402, from a local
+`wrangler dev`, model `deepseek/deepseek-chat`. The gate logs each phase, so
+the facilitator's share is separated from the work being paid for:
+
+| run | verify | upstream | settle | facilitator share |
+|---|---|---|---|---|
+| 1 | 1128 ms | 3646 ms | 1780 ms | 44% |
+| 2 |  988 ms | 6091 ms | 3403 ms | 42% |
+| 3 |  486 ms | 3708 ms | 1699 ms | 37% |
+
+Client-side signing was 27–35 ms and is not the problem.
+
+**Settlement costs 1.7–3.4 seconds, and the two facilitator calls together are
+~40% of the request.** That is a larger share than the credit-risk argument
+assumed, and it changes what batching is for: the original case was about
+bounding loss, but the stronger case is latency. An escrow scheme takes both
+facilitator calls off the critical path — verify becomes a signature check
+against a known deposit, and settlement happens once per epoch rather than once
+per call. On these numbers that is roughly a 40% cut to time-to-first-token,
+paid for once at deposit time.
+
+Caveats, so this is not over-read:
+
+- three samples, one model, one facilitator, one afternoon
+- measured from a local dev server, not from the edge. Deployed on Cloudflare
+  the network distances change and both numbers move — probably down, but the
+  *ratio* is what matters and it is not obviously stable
+- upstream latency varies more than settlement does (3.6–6.1 s), so the
+  percentage is noisy even though the absolute settlement cost is not
+
+What this does not change: batch settlement is still not offered by Blocky402,
+so options 1–3 above stand. It does raise the value of option 3.

@@ -229,17 +229,35 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
 
   const facilitator = { url: env.FACILITATOR_URL, ...(env.FACILITATOR_API_KEY ? { apiKey: env.FACILITATOR_API_KEY } : {}) };
 
+  /*
+    Three timings, logged rather than returned. Which of the three dominates
+    decides whether batching is worth building: settlement latency is the cost
+    batching removes, and if the upstream dominates instead there is nothing to
+    win. Guessing at that split from a single end-to-end number is how the wrong
+    thing gets optimised.
+  */
+  const timing = { verifyMs: 0, upstreamMs: 0, settleMs: 0 };
+
+  const verifyStarted = Date.now();
   const checked = await verifyPayment(facilitator, payment, reqs);
+  timing.verifyMs = Date.now() - verifyStarted;
   if (!checked.ok) return refuse('payment_invalid', checked.reason, 402);
 
+  const upstreamStarted = Date.now();
   const upstream = await callUpstream(request, env);
+  timing.upstreamMs = Date.now() - upstreamStarted;
   if (!upstream.ok) {
     // Nothing was settled, so nothing is owed. Verify-before, settle-after
     // means an upstream failure costs the operator a call and the user nothing.
     return refuse('upstream_failed', upstream.reason, 502);
   }
 
+  const settleStarted = Date.now();
   const settled = await settlePayment(facilitator, payment, reqs);
+  timing.settleMs = Date.now() - settleStarted;
+  console.log(
+    `x402 ${network.id} verify=${timing.verifyMs}ms upstream=${timing.upstreamMs}ms settle=${timing.settleMs}ms`,
+  );
   if (!settled.ok) {
     /*
       The answer exists and the payer authorised the charge; settlement failed
