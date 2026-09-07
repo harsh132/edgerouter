@@ -313,6 +313,16 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
     );
   }
 
+  /*
+    Streamed through. The settlement receipt rides in a header, which is sent
+    before the first byte of body — so a caller reading deltas has proof of
+    payment in hand before the answer starts, not after it ends.
+
+    The cost of streaming is stated rather than hidden: once the status line is
+    written, a mid-stream upstream failure cannot become a 502. It arrives as a
+    truncated body, because there is no way to un-send a 200. Failures *before*
+    the first byte still get the receipt-bearing error below.
+  */
   return new Response(upstream.body, {
     status: 200,
     headers: {
@@ -323,7 +333,7 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
 };
 
 type Upstream =
-  | { ok: true; body: string; contentType: string }
+  | { ok: true; body: ReadableStream<Uint8Array> | null; contentType: string }
   | { ok: false; reason: string };
 
 /**
@@ -380,18 +390,31 @@ const callUpstream = async (request: Request, env: Env): Promise<Upstream> => {
       return { ok: false, reason: last };
     }
 
-    const text = await response.text();
     if (response.ok) {
+      /*
+        The body is handed back unread, so it can be piped to the caller as it
+        arrives rather than buffered here. That is the whole of streaming
+        support: the gate does not need to understand SSE, only to stop
+        collecting it. Whether a response streams is then the caller's choice,
+        made with `stream: true` in the body we forwarded verbatim.
+
+        It also means retrying is only possible up to this point. Once these
+        bytes start moving there is no second attempt — which is why the retry
+        decision is made on the status line, before anything is consumed.
+      */
       return {
         ok: true,
-        body: text,
+        body: response.body,
         contentType: response.headers.get('content-type') ?? 'application/json',
       };
     }
 
+    const text = await response.text();
     last = `upstream ${response.status}`;
     if (!RETRYABLE.has(response.status) || attempt === ATTEMPTS) {
-      return { ok: false, reason: last };
+      // The body of a failed response is worth quoting: an upstream 400 usually
+      // says which field it disliked, and the caller has paid for the answer.
+      return { ok: false, reason: text ? `${last}: ${text.slice(0, 200)}` : last };
     }
     console.warn(`upstream ${response.status}, retrying (attempt ${attempt} of ${ATTEMPTS})`);
     await sleep(attempt, response.headers.get('retry-after'));

@@ -195,13 +195,28 @@ paid 0.01234 ℏ (total 0.03702 ℏ over 3) for deepseek/deepseek-chat
   — sign 15ms, call 9939ms — 0.0.7162784@1788769080.588629774
 ```
 
+## Streaming
+
+Text arrives as it is generated. The gate pipes its upstream through rather than
+collecting it, and the adapter parses the frames — so a long answer appears
+progressively instead of landing whole after a pause.
+
+Payment is unaffected, and the ordering is worth knowing: the gate settles
+*before* it calls its upstream, and the settlement receipt travels in a header,
+which is sent ahead of the first byte of body. A streamed answer is therefore
+paid for just as completely as a buffered one, and the proof arrives before the
+text does.
+
+The cost is one honest caveat. Once bytes are moving the status line is spent,
+so an upstream that dies mid-answer arrives as a short answer rather than an
+error — there is no way to un-send a `200`. The chunk contract still holds
+(`finish` is emitted either way), and the token counts are how you tell.
+
 ## Limits, stated plainly
 
 - **Text only.** Image and file blocks are refused rather than dropped — a model
   answering confidently about a picture it never received is worse than a
   request that fails and says why.
-- **Not streaming.** The gate buffers its upstream before answering, so there is
-  no incremental data to forward. The answer arrives whole.
 - **Testnets.** Hedera testnet and Base Sepolia. The settlement path is real —
   signed, submitted, confirmed on chain — and the money is not.
 

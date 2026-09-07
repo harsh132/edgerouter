@@ -84,11 +84,16 @@ const request = {
 } as unknown as GenerateOptions;
 
 const chunks: StreamChunk[] = [];
+const arrivals: number[] = [];
 let answer = '';
+const started = Date.now();
 try {
   for await (const chunk of adapter.stream(request)) {
     chunks.push(chunk);
-    if (chunk.type === 'text-delta') answer += chunk.text;
+    if (chunk.type === 'text-delta') {
+      answer += chunk.text;
+      arrivals.push(Date.now() - started);
+    }
   }
 } catch (error) {
   die(`stream failed: ${(error as Error).message}`);
@@ -109,7 +114,16 @@ if (usageAt >= 0 && usageAt !== types.length - 2) problems.push('usage was not i
 const usage = chunks.find((c): c is Extract<StreamChunk, { type: 'usage' }> => c.type === 'usage');
 const finish = chunks.at(-1) as Extract<StreamChunk, { type: 'finish' }> | undefined;
 
+/*
+  The question this run exists to answer: did text arrive in pieces, spread over
+  time? Counting deltas is not enough — a buffered response can still be handed
+  over as several chunks at once. The gap between the first and last is what
+  distinguishes streaming from a fast single write.
+*/
+const spread = arrivals.length > 1 ? arrivals.at(-1)! - arrivals[0]! : 0;
 console.log(`  answer    ${answer.trim().slice(0, 160)}`);
+console.log(`  deltas    ${arrivals.length}, first at ${arrivals[0] ?? '-'}ms, last at ${arrivals.at(-1) ?? '-'}ms`);
+console.log(`  streamed  ${arrivals.length > 1 && spread > 50 ? `yes — spread over ${spread}ms` : 'no — arrived at once'}`);
 console.log(`  chunks    ${types.join(' → ')}`);
 if (usage) console.log(`  tokens    in ${usage.usage.inputTokens}, out ${usage.usage.outputTokens}`);
 if (finish) console.log(`  finish    ${finish.reason.kind}`);
@@ -124,6 +138,8 @@ for (const paid of paidCalls) {
 }
 
 if (paidCalls.length !== 1) problems.push(`expected exactly one payment, saw ${paidCalls.length}`);
+if (arrivals.length < 2) problems.push('the answer arrived as a single delta — nothing streamed');
+if (spread <= 50) problems.push(`all deltas landed within ${spread}ms, which is a buffered write`);
 if (answer.trim().length === 0) problems.push('the model returned no text');
 
 console.log('');

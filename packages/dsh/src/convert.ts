@@ -46,6 +46,16 @@ export type OpenAiRequest = {
   temperature?: number;
   max_tokens?: number;
   stop?: string[];
+  stream?: boolean;
+  /**
+   * Asks for a final usage frame.
+   *
+   * Not optional in practice: a streaming response otherwise reports no token
+   * counts at all, and the harness uses them for context accounting. OpenAI and
+   * every compatible provider gate it behind this flag because it costs an
+   * extra frame.
+   */
+  stream_options?: { include_usage: boolean };
 };
 
 /**
@@ -131,7 +141,7 @@ export const convertMessage = (message: Message): OpenAiMessage[] => {
 };
 
 /** Builds the request body. */
-export const toRequest = (options: GenerateOptions): OpenAiRequest => {
+export const toRequest = (options: GenerateOptions, stream = false): OpenAiRequest => {
   const messages: OpenAiMessage[] = [];
   if (options.system) messages.push({ role: 'system', content: options.system });
   for (const message of options.messages) messages.push(...convertMessage(message));
@@ -145,6 +155,7 @@ export const toRequest = (options: GenerateOptions): OpenAiRequest => {
     ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
     ...(options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens }),
     ...(options.stop && options.stop.length > 0 ? { stop: options.stop } : {}),
+    ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
   };
 };
 
@@ -205,9 +216,10 @@ export const toFinishReason = (reason: string | undefined): FinishReason => {
 /**
  * Turns one complete response into the chunk sequence.
  *
- * Non-streaming, so each block is emitted whole: start, one delta, end. The
+ * The buffered path, kept for a gate that collects its upstream. Each block is
+ * emitted whole: start, one delta, end. The
  * harness contract does not require deltas to be small, only ordered — and the
- * gate buffers its upstream anyway, so there is no incremental data to pass on.
+ * streaming path is `streamToChunks`, below.
  * See the note in `adapter.ts`.
  *
  * Ordering is the contract: blocks, then usage, then finish, then nothing.
@@ -248,4 +260,214 @@ export const toChunks = function* (response: OpenAiResponse): Generator<StreamCh
   if (usage) yield { type: 'usage', usage };
 
   yield { type: 'finish', reason: toFinishReason(choice?.finish_reason) };
+};
+
+/* ---------------------------------------------------------- streaming side */
+
+/** One `choices[0].delta` frame from a streaming chat completion. */
+export type OpenAiDelta = {
+  content?: string | null;
+  /** OpenRouter's name for chain-of-thought text. DeepSeek uses the other. */
+  reasoning?: string | null;
+  reasoning_content?: string | null;
+  tool_calls?: Array<{
+    index: number;
+    id?: string;
+    function?: { name?: string; arguments?: string };
+  }>;
+};
+
+export type OpenAiChunk = {
+  choices?: Array<{ delta?: OpenAiDelta; finish_reason?: string | null }>;
+  usage?: OpenAiResponse['usage'];
+};
+
+/**
+ * Splits an SSE byte stream into its `data:` payloads.
+ *
+ * Written out rather than taken from a library because the failure it must
+ * avoid is specific and silent: a frame split across two network reads. Chunk
+ * boundaries have nothing to do with event boundaries, so the tail of a read is
+ * held until a blank line proves the event is complete. Splitting per chunk
+ * instead appears to work for short answers and truncates long ones.
+ */
+export const sseFrames = async function* (
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (signal?.aborted) return;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Events end at a blank line. Both line endings appear in the wild.
+      let split: number;
+      while ((split = buffer.search(/\r?\n\r?\n/)) !== -1) {
+        const event = buffer.slice(0, split);
+        buffer = buffer.slice(split + (buffer[split] === '\r' ? 4 : 2));
+
+        for (const line of event.split(/\r?\n/)) {
+          if (!line.startsWith('data:')) continue; // comments, ids, retry hints
+          const data = line.slice(5).trim();
+          if (data.length > 0) yield data;
+        }
+      }
+    }
+  } finally {
+    // Releasing matters on an abort: an unreleased reader keeps the connection
+    // and the request alive after the caller has stopped listening.
+    reader.releaseLock();
+  }
+};
+
+/**
+ * Turns streaming frames into harness chunks.
+ *
+ * The contract this has to keep, and each clause is a real failure mode:
+ *
+ *   - a block emits `block-start` once, before its first delta
+ *   - every delta of one block carries the same index, allocated in first-seen
+ *     order — not the provider's index, which is per tool call and starts again
+ *     at zero while a text block is already open
+ *   - `block-end` carries the block *accumulated*, so text and tool arguments
+ *     are gathered here even though they were forwarded as they arrived
+ *   - `usage` comes before `finish`, and nothing comes after `finish`
+ *
+ * Tool-call `arguments` stay raw JSON strings and are concatenated, never
+ * parsed. Providers split them mid-token; a parse would fail on the fragment,
+ * and a parse-then-restringify would change the bytes the model produced.
+ */
+export const streamToChunks = async function* (
+  frames: AsyncIterable<string>,
+): AsyncGenerator<StreamChunk> {
+  let nextIndex = 0;
+
+  let textIndex: number | null = null;
+  let text = '';
+  let reasoningIndex: number | null = null;
+  let reasoning = '';
+
+  type Call = { index: number; id: string; name: string; args: string };
+  const calls = new Map<number, Call>();
+
+  let usage: TokenUsage | undefined;
+  let finish: string | undefined;
+
+  /*
+    A text block is closed before a tool call opens, and reasoning before text,
+    because the contract allows one open block at a time. Providers interleave
+    reasoning and content in adjacent frames, so the switch has to be handled
+    rather than assumed away.
+  */
+  const closeText = function* (): Generator<StreamChunk> {
+    if (textIndex === null) return;
+    yield { type: 'block-end', index: textIndex, block: { type: 'text', text } };
+    textIndex = null;
+    text = '';
+  };
+  const closeReasoning = function* (): Generator<StreamChunk> {
+    if (reasoningIndex === null) return;
+    yield {
+      type: 'block-end',
+      index: reasoningIndex,
+      block: { type: 'reasoning', text: reasoning } as ContentBlock,
+    };
+    reasoningIndex = null;
+    reasoning = '';
+  };
+
+  for await (const data of frames) {
+    // The terminator is a literal, not JSON. Parsing it throws.
+    if (data === '[DONE]') break;
+
+    let frame: OpenAiChunk;
+    try {
+      frame = JSON.parse(data) as OpenAiChunk;
+    } catch {
+      // A frame we cannot read is skipped rather than fatal. The alternative is
+      // discarding an answer the caller has already paid for over one bad line.
+      continue;
+    }
+
+    if (frame.usage) usage = toUsage(frame.usage) ?? usage;
+
+    const choice = frame.choices?.[0];
+    if (choice?.finish_reason) finish = choice.finish_reason;
+
+    const delta = choice?.delta;
+    if (!delta) continue;
+
+    const thinking = delta.reasoning ?? delta.reasoning_content;
+    if (typeof thinking === 'string' && thinking.length > 0) {
+      yield* closeText();
+      if (reasoningIndex === null) {
+        reasoningIndex = nextIndex++;
+        yield { type: 'block-start', index: reasoningIndex, blockType: 'reasoning' };
+      }
+      reasoning += thinking;
+      yield { type: 'reasoning-delta', index: reasoningIndex, text: thinking } as StreamChunk;
+    }
+
+    if (typeof delta.content === 'string' && delta.content.length > 0) {
+      yield* closeReasoning();
+      if (textIndex === null) {
+        textIndex = nextIndex++;
+        yield { type: 'block-start', index: textIndex, blockType: 'text' };
+      }
+      text += delta.content;
+      yield { type: 'text-delta', index: textIndex, text: delta.content };
+    }
+
+    for (const part of delta.tool_calls ?? []) {
+      yield* closeReasoning();
+      yield* closeText();
+
+      let call = calls.get(part.index);
+      if (!call) {
+        call = { index: nextIndex++, id: part.id ?? '', name: '', args: '' };
+        calls.set(part.index, call);
+        yield { type: 'block-start', index: call.index, blockType: 'tool-call' };
+      }
+      // The id and name arrive in the first frame of a call, the arguments over
+      // many. Each field is only overwritten by something non-empty.
+      if (part.id) call.id = part.id;
+      if (part.function?.name) call.name = part.function.name;
+
+      const args = part.function?.arguments ?? '';
+      call.args += args;
+      yield {
+        type: 'tool-call-delta',
+        index: call.index,
+        id: ToolCallId(call.id),
+        ...(call.name ? { name: call.name } : {}),
+        argumentsDelta: args,
+      };
+    }
+  }
+
+  yield* closeReasoning();
+  yield* closeText();
+
+  for (const call of calls.values()) {
+    yield {
+      type: 'block-end',
+      index: call.index,
+      block: {
+        type: 'tool-call',
+        id: ToolCallId(call.id),
+        name: call.name,
+        arguments: call.args,
+      },
+    };
+  }
+
+  if (usage) yield { type: 'usage', usage };
+  yield { type: 'finish', reason: toFinishReason(finish) };
 };

@@ -6,12 +6,10 @@
  * a transfer is signed, the request is retried, and the answer arrives. The
  * harness sees an ordinary provider.
  *
- * **Non-streaming, deliberately.** The gate reads its upstream with
- * `response.text()` before answering, so it cannot forward tokens as they
- * arrive; asking it for `stream: true` would buffer the whole SSE body and
- * deliver it in one piece, which is what a non-streaming request already does
- * with less machinery. If the gate learns to stream, this is the place that
- * changes — the chunk vocabulary already supports it.
+ * **Streaming.** The request asks for it and the gate pipes its upstream
+ * through, so text arrives as it is generated. A buffered reply is still
+ * handled: the response's own content type says which arrived, so an older gate
+ * that collects its upstream keeps working without a capability probe.
  *
  * The cost of a call is reported through `onPaid`, because a provider that
  * silently spends money is not one anybody should install.
@@ -25,7 +23,13 @@ import type {
   StreamChunk,
 } from '@deepseek-ai/dsh-llm';
 import { PaymentRefused, payAndFetch, type PaymentSigner } from '../../sdk/src/index';
-import { toChunks, toRequest, type OpenAiResponse } from './convert';
+import {
+  sseFrames,
+  streamToChunks,
+  toChunks,
+  toRequest,
+  type OpenAiResponse,
+} from './convert';
 
 /** What a paid call cost, once it is known. */
 export type Paid = {
@@ -141,7 +145,14 @@ export class EdgerouterAdapter extends LlmAdapter {
     }
 
     const url = new URL('/v1/chat/completions', connection.baseURL).toString();
-    const body = JSON.stringify(toRequest(options));
+    /*
+      Streaming is asked for, and falling back to a whole response is handled
+      below rather than negotiated. A gate that buffers its upstream answers a
+      streaming request with one JSON body and the correct content type, so the
+      response itself says which of the two arrived — no capability probe, no
+      version check, and an older gate keeps working.
+    */
+    const body = JSON.stringify(toRequest(options, true));
 
     let result;
     try {
@@ -215,6 +226,24 @@ export class EdgerouterAdapter extends LlmAdapter {
         signingMs,
         requestMs: paidRequestMs,
       });
+    }
+
+    const contentType = response.headers.get('content-type') ?? '';
+    if (contentType.includes('text/event-stream') && response.body) {
+      /*
+        Deltas as they arrive. Nothing about payment changes here — the gate
+        settled before it called its upstream, and the receipt came back in a
+        header ahead of the first byte, so a streamed answer is paid for just as
+        completely as a buffered one was.
+
+        What does change is the failure mode, and it is worth being clear about:
+        once bytes are flowing the status line is spent, so an upstream that
+        dies mid-answer arrives as a short answer rather than an error. The
+        chunk contract still holds — `finish` is emitted either way — and a
+        caller that needs to distinguish the two has the token counts.
+      */
+      yield* streamToChunks(sseFrames(response.body, options.signal ?? undefined));
+      return;
     }
 
     let parsed: OpenAiResponse;

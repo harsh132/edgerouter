@@ -18,6 +18,8 @@ const HEDERA = 'hedera:testnet';
 const BASE = 'eip155:84532';
 import {
   convertMessage,
+  sseFrames,
+  streamToChunks,
   toChunks,
   toFinishReason,
   toRequest,
@@ -403,6 +405,164 @@ for (const bad of ['0', '-1', '1.5', 'lots']) {
   }
   check(refused, `a cap of "${bad}" is refused rather than defaulted`);
 }
+
+
+/* ------------------------------------------------------------------ stream */
+
+section('Streaming');
+
+/** Feeds bytes in caller-chosen pieces, so split frames can be forced. */
+const streamOf = (pieces: readonly string[]): ReadableStream<Uint8Array> => {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const piece of pieces) controller.enqueue(encoder.encode(piece));
+      controller.close();
+    },
+  });
+};
+
+const frame = (payload: unknown) => `data: ${JSON.stringify(payload)}\n\n`;
+const textFrame = (content: string) => frame({ choices: [{ delta: { content } }] });
+
+const collect = async (pieces: readonly string[]): Promise<StreamChunk[]> => {
+  const out: StreamChunk[] = [];
+  for await (const chunk of streamToChunks(sseFrames(streamOf(pieces)))) out.push(chunk);
+  return out;
+};
+
+/** The same options the request checks above use. */
+const GENERATE = {
+  provider: 'edgerouter',
+  model: 'deepseek/deepseek-chat',
+  messages: [message('user', [{ type: 'text', text: 'hi' }])],
+} as unknown as GenerateOptions;
+
+check(
+  JSON.stringify(toRequest(GENERATE, true)).includes('"stream":true'),
+  'the request asks the gate to stream',
+);
+check(
+  JSON.stringify(toRequest(GENERATE, true)).includes('"include_usage":true'),
+  'and asks for a usage frame, which streaming otherwise omits',
+);
+check(!JSON.stringify(toRequest(GENERATE)).includes('"stream"'), 'buffered requests say nothing');
+
+const simple = await collect([
+  textFrame('Hello'),
+  textFrame(' world'),
+  frame({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 2 } }),
+  'data: [DONE]\n\n',
+]);
+const types = simple.map((chunk) => chunk.type);
+check(types[0] === 'block-start', 'a block opens before its first delta');
+check(
+  types.filter((type) => type === 'text-delta').length === 2,
+  'each delta is forwarded as it arrives, not merged',
+);
+check(types.at(-1) === 'finish', 'the stream ends in finish');
+check(types.at(-2) === 'usage', 'with usage immediately before it');
+check(types.filter((type) => type === 'finish').length === 1, 'exactly one finish');
+check(
+  types.indexOf('block-end') < types.indexOf('usage'),
+  'blocks are closed before usage is reported',
+);
+
+const ended = simple.find((chunk) => chunk.type === 'block-end') as
+  | Extract<StreamChunk, { type: 'block-end' }>
+  | undefined;
+check(
+  ended?.block.type === 'text' && ended.block.text === 'Hello world',
+  'block-end carries the whole accumulated text, not the last delta',
+);
+
+/*
+  The bug this parser exists to avoid. Network reads have nothing to do with
+  event boundaries, so a frame arriving in two pieces must still be one event.
+  Splitting per read looks correct on short answers and truncates long ones.
+*/
+const whole = frame({ choices: [{ delta: { content: 'indivisible' } }] });
+for (const at of [5, 12, whole.length - 3]) {
+  const split = await collect([whole.slice(0, at), whole.slice(at), 'data: [DONE]\n\n']);
+  const text = split
+    .filter((chunk): chunk is Extract<StreamChunk, { type: 'text-delta' }> => chunk.type === 'text-delta')
+    .map((chunk) => chunk.text)
+    .join('');
+  check(text === 'indivisible', `a frame split at byte ${at} is still one frame`);
+}
+
+const crlf = await collect([
+  'data: {"choices":[{"delta":{"content":"crlf"}}]}\r\n\r\n',
+  'data: [DONE]\r\n\r\n',
+]);
+check(
+  crlf.some((chunk) => chunk.type === 'text-delta' && chunk.text === 'crlf'),
+  'CRLF line endings parse too',
+);
+
+const noisy = await collect([
+  ': a comment nobody should choke on\n\n',
+  textFrame('after'),
+  'data: {not json at all}\n\n',
+  'data: [DONE]\n\n',
+]);
+check(
+  noisy.some((chunk) => chunk.type === 'text-delta' && chunk.text === 'after'),
+  'comments and unreadable frames are skipped, not fatal',
+);
+check(noisy.at(-1)?.type === 'finish', 'and the stream still finishes');
+
+/*
+  Tool calls stream their arguments in fragments, and the provider's `index` is
+  per tool call — it starts at zero while a text block is already open, so it
+  cannot be used as the block index.
+*/
+const tools = await collect([
+  textFrame('let me look'),
+  frame({
+    choices: [
+      { delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'search', arguments: '{"q":' } }] } },
+    ],
+  }),
+  frame({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"402"}' } }] } }] }),
+  frame({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+  'data: [DONE]\n\n',
+]);
+const toolEnd = tools.find(
+  (chunk) => chunk.type === 'block-end' && chunk.block.type === 'tool-call',
+) as Extract<StreamChunk, { type: 'block-end' }> | undefined;
+check(
+  toolEnd?.block.type === 'tool-call' && toolEnd.block.arguments === '{"q":"402"}',
+  'argument fragments are concatenated as raw JSON, never parsed',
+);
+check(
+  toolEnd?.block.type === 'tool-call' && toolEnd.block.name === 'search',
+  'the name from the first fragment survives the ones without it',
+);
+const toolStart = tools.find(
+  (chunk) => chunk.type === 'block-start' && chunk.blockType === 'tool-call',
+) as Extract<StreamChunk, { type: 'block-start' }> | undefined;
+check(toolStart?.index === 1, "the block index is ours, not the provider's per-call index");
+check(
+  tools.findIndex((chunk) => chunk.type === 'block-end') <
+    tools.findIndex((chunk) => chunk.type === 'block-start' && chunk.blockType === 'tool-call'),
+  'the open text block is closed before a tool call opens',
+);
+
+const reasoning = await collect([
+  frame({ choices: [{ delta: { reasoning: 'thinking' } }] }),
+  textFrame('answer'),
+  frame({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+  'data: [DONE]\n\n',
+]);
+const reasoningTypes = reasoning.map((chunk) => chunk.type);
+check(
+  reasoningTypes.indexOf('block-end') < reasoningTypes.lastIndexOf('block-start'),
+  'reasoning is closed before text opens — one block at a time',
+);
+
+const empty = await collect(['data: [DONE]\n\n']);
+check(empty.length === 1 && empty[0]!.type === 'finish', 'a stream with no content still finishes');
 
 console.log(failures === 0 ? '\nAll checks pass.' : `\n${failures} FAILED.`);
 if (failures > 0) process.exit(1);
