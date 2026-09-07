@@ -110,6 +110,21 @@ export interface Config {
   authorityUrl?: string;
   /** `authority` only: variable holding the delegated capability. */
   capabilityEnv?: string;
+
+  /**
+   * Reported, not configured: the address this plugin's wallet receives at.
+   *
+   * Written back into settings so it is visible where the provider is
+   * configured, rather than only in a log line nobody reads. A user who has
+   * just installed this needs one thing — an address to send funds to — and
+   * the settings pane is where they are already looking.
+   *
+   * Editing it does nothing. The wallet is whatever key is on disk; this field
+   * is overwritten from that key on every start.
+   */
+  walletAddress?: string;
+  /** Reported, not configured: whether the wallet can pay yet, and what holds. */
+  walletStatus?: string;
 }
 
 export const Config: z<Config> = z.object({
@@ -124,6 +139,9 @@ export const Config: z<Config> = z.object({
 
   authorityUrl: z.string(),
   capabilityEnv: z.string().role('credential-ref').default(DEFAULT_CAPABILITY_ENV),
+
+  walletAddress: z.string().description('Send funds here. Reported by the plugin; editing does nothing.'),
+  walletStatus: z.string().description('Reported by the plugin.'),
 });
 
 /**
@@ -228,7 +246,17 @@ export function apply(ctx: Context, config: Config): void {
       const funding = await wallet.refresh();
       if (!funding.funded) {
         signer = undefined;
-        unavailable = `this wallet has no funds yet — send hbar to ${wallet.evmAddress} and the account is created by that transfer`;
+        unavailable = [
+          'this wallet has no funds yet.',
+          ``,
+          `  Send testnet hbar to   ${wallet.evmAddress}`,
+          `  Get some at            https://portal.hedera.com/faucet`,
+          `  Watch for it with      npx dsh-plugin-edgerouter watch`,
+          ``,
+          'The account is created by that first transfer — there is nothing to',
+          'register and no fee to pay before you can receive.',
+        ].join('\n');
+        report(wallet.evmAddress, 'waiting for funds — send hbar to walletAddress');
         if (announce) {
           ctx.logger.info(`llm-edgerouter: send hbar to ${wallet.evmAddress} to start paying`);
         }
@@ -236,6 +264,10 @@ export function apply(ctx: Context, config: Config): void {
       }
       const first = signer === undefined;
       signer = wallet.signer();
+      report(
+        wallet.evmAddress,
+        `ready — ${funding.accountId} holds ${formatAmount(wallet.network, funding.balanceMinor)}`,
+      );
       if (first) {
         ctx.logger.info(
           `llm-edgerouter: funded — ${funding.accountId} holds ${formatAmount(wallet.network, funding.balanceMinor)}`,
@@ -249,6 +281,18 @@ export function apply(ctx: Context, config: Config): void {
       if (announce) ctx.logger.warn(`llm-edgerouter: ${unavailable}`);
     }
   };
+
+  /*
+    Writes the address and status back into settings, when there is a settings
+    service to write to.
+
+    Guarded against writing what is already there, because `update` emits a
+    change, and a change restarts the payment source, which would report again:
+    an unguarded write is an infinite loop that looks like a working feature
+    until the log fills up.
+  */
+  let report: (address: string, status: string) => void = () => {};
+  let reported = '';
 
   /**
    * The same, for an EVM chain.
@@ -264,7 +308,16 @@ export function apply(ctx: Context, config: Config): void {
       const funding = await evmWallet.refresh();
       if (!funding.canPay) {
         signer = undefined;
-        unavailable = `this wallet holds no USDC yet — send some to ${evmWallet.address}`;
+        unavailable = [
+          'this wallet holds no USDC yet.',
+          ``,
+          `  Send USDC to      ${evmWallet.address}`,
+          `  Get some at       https://faucet.circle.com`,
+          `  Watch for it with npx dsh-plugin-edgerouter watch --network ${evmWallet.network}`,
+          ``,
+          'Paying costs no gas, so USDC alone is enough to start.',
+        ].join('\n');
+        report(evmWallet.address, 'waiting for funds — send USDC to walletAddress');
         if (announce) {
           ctx.logger.info(`llm-edgerouter: send USDC to ${evmWallet.address} to start paying`);
         }
@@ -272,6 +325,10 @@ export function apply(ctx: Context, config: Config): void {
       }
       const first = signer === undefined;
       signer = evmWallet.signer();
+      report(
+        evmWallet.address,
+        `ready — holds ${formatAmount(evmWallet.network, funding.tokenMinor)}`,
+      );
       if (first) {
         ctx.logger.info(
           `llm-edgerouter: funded — ${evmWallet.address} holds ${formatAmount(evmWallet.network, funding.tokenMinor)}`,
@@ -425,6 +482,25 @@ export function apply(ctx: Context, config: Config): void {
     plugin — just one you have to restart to reconfigure.
   */
   ctx.inject(['settings'], (settingsCtx) => {
+    report = (address, status) => {
+      const line = `${address}|${status}`;
+      if (line === reported) return;
+      reported = line;
+      /*
+        Fire and forget, and a failure is logged rather than raised. This is a
+        convenience — the address is also in the logs and in the refusal a call
+        would get — so a settings service that refuses a write must not take the
+        provider down with it.
+      */
+      void settingsCtx.settings
+        .update(NS, { walletAddress: address, walletStatus: status })
+        .catch((error: unknown) => {
+          ctx.logger.warn(
+            `llm-edgerouter: could not report the wallet address into settings: ${(error as Error).message}`,
+          );
+        });
+    };
+
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
       setSource: (source) => {
         current = source;

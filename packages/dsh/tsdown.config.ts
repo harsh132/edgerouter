@@ -15,7 +15,13 @@ import { defineConfig } from 'tsdown';
  * are peer dependencies for the same reason.
  */
 export default defineConfig({
-  entry: ['src/index.ts'],
+  /*
+    Two entries: the plugin the harness loads, and a wallet CLI the person who
+    installed it can run. The CLI is not a convenience script in this repo — a
+    user who installed a tarball into a profile has no repository and no bun,
+    and "no setup required" cannot end with "clone this to find your address".
+  */
+  entry: ['src/index.ts', 'src/cli.ts'],
   outDir: 'lib',
   format: ['esm'],
   platform: 'node',

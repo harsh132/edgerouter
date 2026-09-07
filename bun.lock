@@ -21,10 +21,15 @@
     },
     "packages/dsh": {
       "name": "dsh-plugin-edgerouter",
-      "version": "0.2.0",
+      "version": "0.4.0",
+      "bin": {
+        "dsh-plugin-edgerouter": "lib/cli.js",
+      },
       "dependencies": {
         "@deepseek-ai/schemastery": "^3.18.2",
+        "@x402/evm": "^2.25.0",
         "@x402/hedera": "^2.25.0",
+        "viem": "^2.48.11",
       },
       "devDependencies": {
         "@deepseek-ai/cordis": "4.0.2",

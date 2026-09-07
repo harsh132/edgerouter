@@ -52,30 +52,39 @@ cache.
 
 ## Setup
 
-There isn't one. On first run the plugin generates a wallet and logs an address:
+There isn't one. On first run the plugin generates a wallet and reports an
+address in three places, so you find it wherever you happen to look:
 
-```
-llm-edgerouter: send hbar to 0xf2829e87d7be67965af5fa99870917918da23b47 to start paying
+- in the provider's settings, as `walletAddress`
+- in the log, once, at startup
+- in the refusal you get if you send a message before funding it
+
+Send funds to that address and the plugin starts paying within twenty seconds.
+
+```sh
+npx dsh-plugin-edgerouter            # the address, and where to get funds
+npx dsh-plugin-edgerouter watch      # wait here until they land
+npx dsh-plugin-edgerouter balance    # what it holds
+npx dsh-plugin-edgerouter sweep <to> # take it all back out
 ```
 
-Send hbar to that address from any wallet, exchange, or the
-[testnet faucet](https://portal.hedera.com/faucet). The plugin notices within
-twenty seconds and starts paying. On an EVM chain it is the same flow with USDC
-and [Circle's faucet](https://faucet.circle.com).
+That command ships with the plugin — no repository, no toolchain. It reads the
+same wallet the harness spends from, so what it reports is what will be paid
+with.
 
 **The address is not an account yet, and that is fine.** Hedera creates the
 account on the first transfer to it (auto account creation, HIP-32/HIP-542), so
-there is nothing to register and no fee to pay before you can receive. Until
-something arrives the provider refuses with the address rather than an error
-about credentials — a wallet with no money is a state, not a misconfiguration.
+there is nothing to register and no fee to pay before you can receive. On EVM
+chains the address is already an account. Until something arrives the provider
+refuses with the address and a faucet link rather than an error about
+credentials — a wallet with no money is a state, not a misconfiguration:
 
-Inspect it from a terminal:
+```
+edgerouter: this wallet has no funds yet.
 
-```sh
-bun packages/sdk/wallet.ts address     # where to send funds
-bun packages/sdk/wallet.ts balance     # what it holds, and its account id
-bun packages/sdk/wallet.ts watch       # poll until funds land
-bun packages/sdk/wallet.ts sweep 0.0.x # move everything back out
+  Send testnet hbar to   0xf2829e87d7be67965af5fa99870917918da23b47
+  Get some at            https://portal.hedera.com/faucet
+  Watch for it with      npx dsh-plugin-edgerouter watch
 ```
 
 ### About that key
