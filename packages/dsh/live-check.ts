@@ -14,7 +14,7 @@
  *   bun packages/dsh/live-check.ts [base-url]
  */
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm';
-import { hederaSigner, formatHbar } from '../sdk/src/index';
+import { hederaSigner, formatHbar, loadOrCreateWallet } from '../sdk/src/index';
 import { EdgerouterAdapter, type Paid } from './src/adapter';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:8789';
@@ -27,8 +27,27 @@ function die(message: string): never {
   process.exit(1);
 }
 
-if (!ACCOUNT) die('set HEDERA_ACCOUNT_ID to the payer account');
-if (!KEY) die('set HEDERA_PRIVATE_KEY in the environment — never as an argument');
+/*
+  The generated wallet by default, because that is the path a user actually
+  takes. The environment still wins when it is set, so CI and anyone with an
+  existing funded account can drive the same check without a second wallet.
+*/
+let signerFor: () => ReturnType<typeof hederaSigner>;
+let payer: string;
+
+if (ACCOUNT && KEY) {
+  signerFor = () => hederaSigner({ accountId: ACCOUNT, privateKey: KEY, network: 'hedera:testnet' });
+  payer = `${ACCOUNT} (from the environment)`;
+} else {
+  const { wallet, path } = loadOrCreateWallet({ network: 'hedera:testnet' });
+  const funding = await wallet.refresh();
+  if (!funding.funded) {
+    die(`the generated wallet has no funds — send hbar to ${wallet.evmAddress}
+  stored at ${path}`);
+  }
+  signerFor = () => wallet.signer();
+  payer = `${funding.accountId} (generated wallet, ${formatHbar(funding.balanceMinor)})`;
+}
 // Deliberately not required: the gate is permissionless, and running this
 // without a token is the more important case to be able to test.
 
@@ -42,12 +61,12 @@ const adapter = new EdgerouterAdapter({
     network: 'hedera:testnet',
     defaultContextWindow: 128_000,
   }),
-  signer: () => hederaSigner({ accountId: ACCOUNT, privateKey: KEY, network: 'hedera:testnet' }),
+  signer: signerFor,
   onPaid: (paid) => paidCalls.push(paid),
 });
 
 console.log(`\n  gate      ${BASE}`);
-console.log(`  payer     ${ACCOUNT}`);
+console.log(`  payer     ${payer}`);
 console.log(`  capability ${CAPABILITY ? 'presented' : 'none — anonymous'}`);
 
 const models = await adapter.listModels('edgerouter');
