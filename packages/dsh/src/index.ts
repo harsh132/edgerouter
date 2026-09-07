@@ -166,6 +166,51 @@ export const resolveMaxAmount = (raw: string | undefined, network: string): bigi
   return value;
 };
 
+/** Somewhere a wallet report can be delivered. */
+export type ReportSink = (address: string, status: string) => void;
+
+export type Reporter = {
+  /** Report the current address and status. Repeats are dropped. */
+  publish(address: string, status: string): void;
+  /** Install the sink, replaying whatever was reported before it existed. */
+  attach(sink: ReportSink): void;
+};
+
+/**
+ * Buffers wallet reports until something can receive them.
+ *
+ * Both halves of this are load-bearing, and the second was learned the hard
+ * way. Repeats are dropped because a settings write emits a change, a change
+ * restarts the payment source, and the payment source reports — unguarded,
+ * that is a loop.
+ *
+ * And the sink arrives late: `ctx.inject` runs when the settings service
+ * becomes available, generally after the payment source has started and
+ * already reported once. Without the replay, that first report goes nowhere,
+ * the guard records it as sent, and every later report — identical — is
+ * skipped. The settings page then says "no wallet yet" about a wallet that
+ * exists, which is exactly what it did.
+ */
+export const createReporter = (): Reporter => {
+  let sink: ReportSink | null = null;
+  let sent = '';
+  let last: { address: string; status: string } | null = null;
+
+  return {
+    publish(address, status) {
+      const line = `${address}|${status}`;
+      if (line === sent) return;
+      sent = line;
+      last = { address, status };
+      sink?.(address, status);
+    },
+    attach(next) {
+      sink = next;
+      if (last) next(last.address, last.status);
+    },
+  };
+};
+
 export function apply(ctx: Context, config: Config): void {
   /*
     The authoritative config is a thunk, not the value handed to `apply`.
@@ -305,8 +350,7 @@ export function apply(ctx: Context, config: Config): void {
     to name a thing rather than report on it. A settings page is the right
     answer to "the user cannot see this", and a name is not.
   */
-  let toSettings: (address: string, status: string) => void = () => {};
-  let published = '';
+  const reporter = createReporter();
 
   /**
    * The same, for an EVM chain.
@@ -498,13 +542,7 @@ export function apply(ctx: Context, config: Config): void {
    * unguarded, that is a loop which looks like a working feature until the log
    * fills up.
    */
-  const publish = (address: string, status: string) => {
-    const line = `${address}|${status}`;
-    if (line === published) return;
-    published = line;
-
-    toSettings(address, status);
-  };
+  const publish = (address: string, status: string) => reporter.publish(address, status);
 
   /*
     Started last, after everything it publishes into exists.
@@ -524,7 +562,7 @@ export function apply(ctx: Context, config: Config): void {
     plugin — just one you have to restart to reconfigure.
   */
   ctx.inject(['settings'], (settingsCtx) => {
-    toSettings = (address, status) => {
+    reporter.attach((address, status) => {
       /*
         Fire and forget, and a failure is logged rather than raised. This is a
         convenience — the address is also in the logs and in the refusal a call
@@ -538,7 +576,7 @@ export function apply(ctx: Context, config: Config): void {
             `llm-edgerouter: could not report the wallet address into settings: ${(error as Error).message}`,
           );
         });
-    };
+    });
 
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
       setSource: (source) => {

@@ -12,7 +12,7 @@ import { LlmError } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm';
 import { base64, type PaymentRequirements, type PaymentSigner } from '../sdk/src/index';
 import { EdgerouterAdapter } from './src/adapter';
-import { resolveMaxAmount } from './src/index';
+import { resolveMaxAmount, createReporter } from './src/index';
 
 const HEDERA = 'hedera:testnet';
 const BASE = 'eip155:84532';
@@ -563,6 +563,55 @@ check(
 
 const empty = await collect(['data: [DONE]\n\n']);
 check(empty.length === 1 && empty[0]!.type === 'finish', 'a stream with no content still finishes');
+
+
+/* ---------------------------------------------------------------- reporting */
+
+section('Reporting the wallet address');
+
+{
+  const seen: string[] = [];
+
+  const reporter = createReporter();
+  reporter.publish('0xabc', 'waiting for funds');
+  check(seen.length === 0, 'a report before anything is listening goes nowhere');
+
+  /*
+    The bug this exists for. The settings service attaches after the payment
+    source has started and already reported once; without the replay that first
+    report is lost, the guard has recorded it as sent, and every later identical
+    report is skipped — so the address is never written and the settings page
+    says "no wallet yet" about a wallet that exists.
+  */
+  reporter.attach((address, status) => seen.push(`${address}|${status}`));
+  check(seen.length === 1, 'attaching replays what was already reported');
+  check(seen[0] === '0xabc|waiting for funds', 'and replays it verbatim');
+
+  reporter.publish('0xabc', 'waiting for funds');
+  check(seen.length === 1, 'an unchanged report is not repeated');
+
+  reporter.publish('0xabc', 'ready — holds 1 ℏ');
+  check(seen.length === 2, 'a changed status is reported');
+  check(seen[1] === '0xabc|ready — holds 1 ℏ', 'with the new status');
+
+  reporter.publish('0xdef', 'ready — holds 1 ℏ');
+  check(seen.length === 3, 'a changed address is reported');
+}
+
+{
+  // A sink that never arrives must not throw on the way past.
+  const quiet = createReporter();
+  quiet.publish('0x1', 'a');
+  quiet.publish('0x2', 'b');
+  check(true, 'publishing with no sink attached is harmless');
+
+  const later: string[] = [];
+  quiet.attach((address) => later.push(address));
+  check(
+    later.length === 1 && later[0] === '0x2',
+    'only the latest state is replayed, not the whole history',
+  );
+}
 
 console.log(failures === 0 ? '\nAll checks pass.' : `\n${failures} FAILED.`);
 if (failures > 0) process.exit(1);
