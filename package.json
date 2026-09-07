@@ -16,7 +16,9 @@
     "live-check": "bun packages/dsh/live-check.ts",
     "authority": "bun packages/sdk/authority-serve.ts",
     "wallet": "bun packages/sdk/wallet.ts",
-    "fund-check": "bun packages/sdk/fund-check.ts"
+    "fund-check": "bun packages/sdk/fund-check.ts",
+    "delegate-live-check": "bun packages/sdk/delegate-live-check.ts",
+    "send": "bun packages/sdk/send.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260907.1",
