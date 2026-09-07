@@ -1,0 +1,13 @@
+{
+  "name": "@edgerouter/dsh",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "description": "DeepSeek Harness plugin: an LLM provider that pays for its own inference over x402.",
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-llm": "0.0.1-rc.1",
+    "@deepseek-ai/schemastery": "3.18.2"
+  }
+}
