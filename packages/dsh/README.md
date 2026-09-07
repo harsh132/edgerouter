@@ -53,11 +53,18 @@ cache.
 ## Setup
 
 There isn't one. On first run the plugin generates a wallet and reports an
-address in three places, so you find it wherever you happen to look:
+address everywhere it can, because no single surface reaches everyone:
 
-- in the provider's settings, as `walletAddress`
-- in the log, once, at startup
+- in the Models pane, as the provider's name — `edgerouter · fund 0x33f7…1452`,
+  becoming `edgerouter · 0.29 ℏ` once funded
 - in the refusal you get if you send a message before funding it
+- in `settings.yaml` as `walletAddress`, under `llm-edgerouter`
+- in the log, once, at startup
+
+A name is an odd place for a balance. It is used because Desktop's Models pane
+renders a provider's section as an endpoint-and-key profile — it finds no field
+of ours it recognises and prints "other fields live in settings.yaml" — and the
+display name is the one string in that pane a plugin controls.
 
 Send funds to that address and the plugin starts paying within twenty seconds.
 

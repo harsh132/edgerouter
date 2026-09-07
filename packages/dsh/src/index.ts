@@ -256,7 +256,11 @@ export function apply(ctx: Context, config: Config): void {
           'The account is created by that first transfer — there is nothing to',
           'register and no fee to pay before you can receive.',
         ].join('\n');
-        report(wallet.evmAddress, 'waiting for funds — send hbar to walletAddress');
+        publish(
+          wallet.evmAddress,
+          'waiting for funds — send hbar to walletAddress',
+          `fund ${short(wallet.evmAddress)}`,
+        );
         if (announce) {
           ctx.logger.info(`llm-edgerouter: send hbar to ${wallet.evmAddress} to start paying`);
         }
@@ -264,9 +268,10 @@ export function apply(ctx: Context, config: Config): void {
       }
       const first = signer === undefined;
       signer = wallet.signer();
-      report(
+      publish(
         wallet.evmAddress,
         `ready — ${funding.accountId} holds ${formatAmount(wallet.network, funding.balanceMinor)}`,
+        formatAmount(wallet.network, funding.balanceMinor),
       );
       if (first) {
         ctx.logger.info(
@@ -291,8 +296,23 @@ export function apply(ctx: Context, config: Config): void {
     an unguarded write is an infinite loop that looks like a working feature
     until the log fills up.
   */
-  let report: (address: string, status: string) => void = () => {};
-  let reported = '';
+  /*
+    Two ways of saying the same thing, because neither reaches everyone.
+
+    `toSettings` writes the address into the settings section, which is where it
+    belongs and is also where Desktop declines to render it: the Models pane
+    treats a provider's section as an endpoint-and-key profile, finds no field
+    it recognises, and prints "other fields live in settings.yaml". The value is
+    still there, still correct, and reachable from the button in that same
+    dialog — but it is not on screen.
+
+    `toDirectory` puts it in the provider's display name, which is the one
+    string in that pane a plugin controls. A name is a strange place for a
+    balance, and it is the difference between a user seeing an address and a
+    user being told to go and find a YAML file.
+  */
+  let toSettings: (address: string, status: string) => void = () => {};
+  let published = '';
 
   /**
    * The same, for an EVM chain.
@@ -317,7 +337,11 @@ export function apply(ctx: Context, config: Config): void {
           ``,
           'Paying costs no gas, so USDC alone is enough to start.',
         ].join('\n');
-        report(evmWallet.address, 'waiting for funds — send USDC to walletAddress');
+        publish(
+          evmWallet.address,
+          'waiting for funds — send USDC to walletAddress',
+          `fund ${short(evmWallet.address)}`,
+        );
         if (announce) {
           ctx.logger.info(`llm-edgerouter: send USDC to ${evmWallet.address} to start paying`);
         }
@@ -325,9 +349,10 @@ export function apply(ctx: Context, config: Config): void {
       }
       const first = signer === undefined;
       signer = evmWallet.signer();
-      report(
+      publish(
         evmWallet.address,
         `ready — holds ${formatAmount(evmWallet.network, funding.tokenMinor)}`,
+        formatAmount(evmWallet.network, funding.tokenMinor),
       );
       if (first) {
         ctx.logger.info(
@@ -435,7 +460,6 @@ export function apply(ctx: Context, config: Config): void {
     }
   };
 
-  void start();
   /*
     Registered as an effect so the poll stops when the plugin unloads. `effect`
     is how cordis 4 ties a disposer to a fiber's lifetime — the harness's own
@@ -470,9 +494,48 @@ export function apply(ctx: Context, config: Config): void {
     onPaid,
   });
 
-  ctx.llm.registerConfigurableProviders([
+  const directory = ctx.llm.registerConfigurableProviders([
     { provider: PROVIDER, displayName: 'edgerouter', settingsNs: NS, settingsPath: [] },
   ]);
+
+  /** `0x1234…cdef`. An address nobody can read is not worth the width. */
+  const short = (address: string): string =>
+    address.length > 14 ? `${address.slice(0, 8)}…${address.slice(-4)}` : address;
+
+  /**
+   * Says where the money goes, everywhere that will listen.
+   *
+   * Guarded against repeating itself, because a settings write emits a change,
+   * a change restarts the payment source, and the payment source publishes —
+   * unguarded, that is a loop which looks like a working feature until the log
+   * fills up.
+   */
+  const publish = (address: string, status: string, short_: string) => {
+    const line = `${address}|${status}`;
+    if (line === published) return;
+    published = line;
+
+    try {
+      directory.replace([
+        { provider: PROVIDER, displayName: `edgerouter · ${short_}`, settingsNs: NS, settingsPath: [] },
+      ]);
+    } catch (error) {
+      // A rejected rename is cosmetic. It must not take a working provider down.
+      ctx.logger.warn(`llm-edgerouter: could not update the display name: ${(error as Error).message}`);
+    }
+
+    toSettings(address, status);
+  };
+
+  /*
+    Started last, after everything it publishes into exists.
+
+    It would in fact survive being started earlier — the first thing it awaits
+    is a network read, so `apply` returns long before anything is published —
+    but that is an accident of where an await happens to sit, and a later edit
+    that moves one would turn it into a use-before-declaration at runtime.
+  */
+  void start();
   ctx.llm.registerAdapter([PROVIDER], adapter);
 
   /*
@@ -482,10 +545,7 @@ export function apply(ctx: Context, config: Config): void {
     plugin — just one you have to restart to reconfigure.
   */
   ctx.inject(['settings'], (settingsCtx) => {
-    report = (address, status) => {
-      const line = `${address}|${status}`;
-      if (line === reported) return;
-      reported = line;
+    toSettings = (address, status) => {
       /*
         Fire and forget, and a failure is logged rather than raised. This is a
         convenience — the address is also in the logs and in the refusal a call
