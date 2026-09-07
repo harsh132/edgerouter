@@ -87,7 +87,8 @@ Everything has a working default. This is the whole surface:
 llm-edgerouter:
   wallet: local             # local | environment | authority
   network: hedera:testnet
-  maxAmount: '100000000'    # ceiling for ONE call, in tinybars. 1 ℏ.
+  # maxAmount: '100000000'  # optional per-call ceiling. Unset takes a
+                            # per-network default: 1 ℏ, or 0.1 USDC.
   baseURL: https://edgerouter-gate.prakashharsh32.workers.dev
 ```
 
@@ -104,9 +105,11 @@ Two, and the wallet you get depends on which you pick:
 | `hedera:testnet` | HBAR | hbar, to the address shown |
 | `eip155:84532` | USDC on Base Sepolia | USDC, to the address shown |
 
-`maxAmount` is in the asset's smallest unit either way — tinybars (10⁸ per ℏ) on
-Hedera, six decimals on USDC. `'100000000'` is 1 ℏ; on Base Sepolia it would be
-100 USDC, which is almost certainly not what you meant.
+`maxAmount` is in the asset's smallest unit, and the smallest unit is not one
+unit: `'100000000'` is 1 ℏ on Hedera and **100 USDC** on Base Sepolia. The same
+literal, three orders of magnitude apart in what it permits — which is why the
+default is per network (1 ℏ, or 0.1 USDC) rather than one number. Set it
+explicitly and it means exactly what you wrote, on whichever chain.
 
 On EVM chains there is an asymmetry worth knowing before you fund one:
 

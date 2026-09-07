@@ -37,10 +37,10 @@ import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-settings';
 import {
   connectAuthority,
+  defaultMaxAmount,
   describe,
   evmSigner,
-  formatHbar,
-  formatUsdc,
+  formatAmount,
   hederaSigner,
   isEvmNetwork,
   loadOrCreateEvmWallet,
@@ -75,8 +75,6 @@ const DEFAULT_KEY_ENV = 'HEDERA_PRIVATE_KEY';
  * with no configuration is a working install.
  */
 const DEFAULT_BASE_URL = 'https://edgerouter-gate.prakashharsh32.workers.dev';
-/** One HBAR in tinybars. A per-call ceiling, not a budget. */
-const DEFAULT_MAX_AMOUNT = '100000000';
 const DEFAULT_NETWORK = 'hedera:testnet';
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 /** How often an unfunded wallet re-asks whether anything has arrived. */
@@ -92,10 +90,12 @@ export interface Config {
   /** CAIP-2 network to pay on. */
   network?: string;
   /**
-   * Ceiling for one call, in the asset's smallest unit — tinybars on Hedera.
+   * Ceiling for one call, in the asset's smallest unit.
    *
-   * A string because it is a bigint and JSON has no such thing, and always
-   * present because an uncapped payment client signs whatever it is quoted.
+   * A string because it is a bigint and JSON has no such thing. Left unset it
+   * takes a per-network default, because the smallest unit is not one unit:
+   * `100000000` is one hbar on Hedera and one hundred USDC on Base. There is
+   * no single number that is sensible on both, so there is no single default.
    */
   maxAmount?: string;
   /** Context capacity assumed when the gate does not say. */
@@ -116,7 +116,7 @@ export const Config: z<Config> = z.object({
   baseURL: z.string().default(DEFAULT_BASE_URL),
   wallet: z.union(['local', 'environment', 'authority'] as const).default('local'),
   network: z.string().default(DEFAULT_NETWORK),
-  maxAmount: z.string().default(DEFAULT_MAX_AMOUNT),
+  maxAmount: z.string(),
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
 
   accountId: z.string(),
@@ -127,13 +127,17 @@ export const Config: z<Config> = z.object({
 });
 
 /**
- * Reads and validates the per-call ceiling.
+ * Reads and validates the per-call ceiling for one network.
  *
- * Refused rather than defaulted when malformed: a cap that silently became
- * something else is not a cap, and the failure it prevents is expensive.
+ * Unset takes the network's own default — see `defaultMaxAmount`, and note
+ * that a number sensible on Hedera is a hundredfold on a six-decimal
+ * stablecoin. Malformed is refused rather than defaulted: a cap that silently
+ * became something else is not a cap, and the failure it prevents is
+ * expensive.
  */
-export const resolveMaxAmount = (raw: string | undefined): bigint => {
-  const text = (raw ?? DEFAULT_MAX_AMOUNT).trim();
+export const resolveMaxAmount = (raw: string | undefined, network: string): bigint => {
+  const text = raw?.trim();
+  if (!text) return defaultMaxAmount(network);
   if (!/^\d+$/.test(text)) {
     throw new Error(
       `llm-edgerouter: maxAmount must be a whole number of the smallest unit, got "${text}"`,
@@ -161,11 +165,12 @@ export function apply(ctx: Context, config: Config): void {
     reason is said once, which is the same trade `llm-deepseek` makes for its
     own beyond-schema bounds.
   */
-  let lastGoodMax = resolveMaxAmount(config.maxAmount);
+  let lastGoodMax = resolveMaxAmount(config.maxAmount, config.network ?? DEFAULT_NETWORK);
   let complainedAboutMax = false;
   const maxAmount = (): bigint => {
     try {
-      lastGoodMax = resolveMaxAmount(current().maxAmount);
+      const now = current();
+      lastGoodMax = resolveMaxAmount(now.maxAmount, now.network ?? DEFAULT_NETWORK);
       complainedAboutMax = false;
     } catch (error) {
       if (!complainedAboutMax) {
@@ -233,7 +238,7 @@ export function apply(ctx: Context, config: Config): void {
       signer = wallet.signer();
       if (first) {
         ctx.logger.info(
-          `llm-edgerouter: funded — ${funding.accountId} holds ${formatHbar(funding.balanceMinor)}`,
+          `llm-edgerouter: funded — ${funding.accountId} holds ${formatAmount(wallet.network, funding.balanceMinor)}`,
         );
       }
       // Nothing further to wait for; the balance itself is checked per payment
@@ -269,7 +274,7 @@ export function apply(ctx: Context, config: Config): void {
       signer = evmWallet.signer();
       if (first) {
         ctx.logger.info(
-          `llm-edgerouter: funded — ${evmWallet.address} holds ${formatUsdc(funding.tokenMinor)}`,
+          `llm-edgerouter: funded — ${evmWallet.address} holds ${formatAmount(evmWallet.network, funding.tokenMinor)}`,
         );
       }
       clearPolling();
@@ -392,9 +397,9 @@ export function apply(ctx: Context, config: Config): void {
   const onPaid = (paid: Paid) => {
     spent += paid.amount;
     calls += 1;
-    const each = paid.network.startsWith('hedera:')
-      ? `${formatHbar(paid.amount)} (total ${formatHbar(spent)} over ${calls})`
-      : `${paid.amount} (total ${spent} over ${calls})`;
+    const each =
+      `${formatAmount(paid.network, paid.amount)}` +
+      ` (total ${formatAmount(paid.network, spent)} over ${calls})`;
     ctx.logger.info(
       `paid ${each} for ${paid.model} — sign ${paid.signingMs}ms, call ${paid.requestMs}ms` +
         (paid.transaction ? ` — ${paid.transaction}` : ''),

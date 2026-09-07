@@ -7,6 +7,7 @@ export * from './pay/types';
 export * from './pay/client';
 export * from './pay/hedera';
 export * from './pay/evm';
+export * from './pay/limits';
 export * from './wallet/local';
 export * from './wallet/evm-local';
 export * from './wallet/store';

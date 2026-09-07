@@ -13,6 +13,9 @@ import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm
 import { base64, type PaymentRequirements, type PaymentSigner } from '../sdk/src/index';
 import { EdgerouterAdapter } from './src/adapter';
 import { resolveMaxAmount } from './src/index';
+
+const HEDERA = 'hedera:testnet';
+const BASE = 'eip155:84532';
 import {
   convertMessage,
   toChunks,
@@ -371,12 +374,30 @@ await throws('AUTH', 'a 401 from the gate is an auth failure', async () => {
 
 section('Configuration');
 
-check(resolveMaxAmount('500') === 500n, 'a numeric cap parses');
-check(resolveMaxAmount(undefined) === 100_000_000n, 'the default cap is one HBAR');
-for (const bad of ['0', '-1', '1.5', 'lots', '']) {
+check(resolveMaxAmount('500', HEDERA) === 500n, 'a numeric cap parses');
+check(resolveMaxAmount('500', BASE) === 500n, 'and means the same number on any network');
+
+/*
+  The default is per network because the smallest unit is not one unit. The same
+  literal is one hbar and one hundred USDC, so a single default is correct on at
+  most one chain and expensive on the others.
+*/
+check(resolveMaxAmount(undefined, HEDERA) === 100_000_000n, 'unset on Hedera is one HBAR');
+check(resolveMaxAmount(undefined, BASE) === 100_000n, 'unset on an EVM chain is 0.1 USDC');
+check(
+  resolveMaxAmount(undefined, HEDERA) !== resolveMaxAmount(undefined, BASE),
+  'the two defaults are different numbers, which is the entire point',
+);
+check(resolveMaxAmount('  ', BASE) === 100_000n, 'a blank cap is unset, not zero');
+/*
+  An empty string is deliberately not in this list. It used to be refused, and
+  now means "unset" — because a settings form with a cleared field is a user
+  asking for the default, not a user writing a malformed number.
+*/
+for (const bad of ['0', '-1', '1.5', 'lots']) {
   let refused = false;
   try {
-    resolveMaxAmount(bad);
+    resolveMaxAmount(bad, HEDERA);
   } catch {
     refused = true;
   }
