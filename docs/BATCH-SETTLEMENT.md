@@ -67,8 +67,42 @@ weakens: a cumulative voucher can reflect actual usage. Worth revisiting once
 the channel exists, and deliberately not before — a wrong usage meter is worse
 than a blunt flat one.
 
-## Status
+## Status: planned, and not currently reachable
 
-Not implemented. The gate today speaks `scheme: "exact"` on both EVM and
-Hedera. This is the next payment change, and it is the one that makes the
-economics honest.
+Verified live on 2026-09-07 with `bun apps/gate/facilitator-check.ts`:
+
+    https://api.testnet.blocky402.com/supported
+      exact  eip155:80002
+      exact  solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1
+      exact  hedera:testnet   feePayer 0.0.7162784
+
+    https://api.blocky402.com/supported
+      exact  hedera:mainnet   feePayer 0.0.10571514
+
+**`batch-settlement` is offered on no network by either endpoint. Only
+`exact`.** Hedera's own documentation agrees: *"settlement is per-request and
+discrete. x402 is not built for streaming payments or multi-hop routing."*
+
+So escrow remains the correct fix for the credit-risk problem and is *not*
+available through the facilitator Hedera's prize track requires. Three options,
+in order of cost:
+
+1. **Accept the exposure for now.** Per-call prices are ~$0.001, so a single
+   abuse costs a tenth of a cent. It is only dangerous automated, and the
+   telemetry ledger will show it happening.
+2. **Find a facilitator that settles `batch-settlement`.** Several exist in the
+   x402 directory; none of them is Blocky402, so this trades the Hedera track
+   for the economics.
+3. **Run our own facilitator.** Hedera documents this path. Most work, most
+   control, and the only route that gets escrow *and* the Hedera track.
+
+`facilitator-check.ts` reports whether batch settlement has appeared, so this
+document does not have to be re-researched by hand.
+
+## The check that found this
+
+The same script compares configured networks against the facilitator's
+capabilities, and caught a live mismatch on its first run: the gate defaulted to
+Base Sepolia, which Blocky402 does not settle. A gate can quote a network
+perfectly and still be unsettleable — that failure is invisible until a real
+payment arrives, by which point a user has signed something nobody can settle.

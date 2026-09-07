@@ -10,7 +10,8 @@
     "check": "bun packages/core/check.ts && bun apps/gate/check.ts",
     "smoke": "bun apps/gate/smoke.ts",
     "dev": "wrangler dev --config apps/gate/wrangler.jsonc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "facilitator-check": "bun apps/gate/facilitator-check.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260907.1",

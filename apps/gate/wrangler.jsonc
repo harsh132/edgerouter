@@ -6,10 +6,21 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "vars": {
-    // Testnets by default, so a misconfigured deploy cannot move real money.
-    // Hedera is CAIP-2 `hedera:testnet` with entity-id assets, not eip155 —
-    // the two are genuinely different shapes, not one with different values.
-    "NETWORKS": "[{\"kind\":\"evm\",\"id\":\"eip155:84532\",\"asset\":\"0x036CbD53842c5426634e7929541eC2318f3dCF7e\",\"payTo\":\"0x0000000000000000000000000000000000000000\",\"assetName\":\"USDC\",\"assetVersion\":\"2\"},{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.0\",\"feePayer\":\"0.0.0\"}]",
+    // Verified live against https://api.testnet.blocky402.com/supported.
+    //
+    // Polygon Amoy, not Base Sepolia: Blocky402's testnet settles eip155:80002
+    // and a gate quoting a network its facilitator cannot settle is broken in a
+    // way nothing notices until a real payment arrives.
+    //
+    // Hedera uses HBAR (0.0.0) rather than an HTS token, because HTS transfers
+    // additionally require the payer's account to be *associated* with the
+    // token — an extra step that has nothing to do with what is being tested.
+    // Amounts on Hedera are tinybars, 10^8 per HBAR.
+    //
+    // feePayer is the facilitator's own sponsoring account, not ours to choose.
+    "NETWORKS": "[{\"kind\":\"evm\",\"id\":\"eip155:80002\",\"asset\":\"0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582\",\"payTo\":\"0x0000000000000000000000000000000000000000\",\"assetName\":\"USDC\",\"assetVersion\":\"2\"},{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.0\",\"feePayer\":\"0.0.7162784\"}]",
+    "DEFAULT_NETWORK": "hedera:testnet"
+  },{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.0\",\"feePayer\":\"0.0.0\"}]",
     "DEFAULT_NETWORK": "eip155:84532"
   },
   // The only state the gate keeps: who was served but never settled. Losing it
