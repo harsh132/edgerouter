@@ -7,7 +7,7 @@
     "apps/*"
   ],
   "scripts": {
-    "check": "bun packages/core/check.ts && bun packages/sdk/check.ts && bun packages/sdk/wallet-check.ts && bun packages/sdk/delegate-check.ts && bun packages/dsh/check.ts && bun apps/gate/check.ts && bun apps/gate/config-check.ts",
+    "check": "bun packages/core/check.ts && bun packages/sdk/check.ts && bun packages/sdk/wallet-check.ts && bun packages/sdk/evm-check.ts && bun packages/sdk/delegate-check.ts && bun packages/dsh/check.ts && bun apps/gate/check.ts && bun apps/gate/config-check.ts",
     "smoke": "bun apps/gate/smoke.ts",
     "dev": "wrangler dev --config apps/gate/wrangler.jsonc",
     "typecheck": "tsc --noEmit",
@@ -18,7 +18,8 @@
     "wallet": "bun packages/sdk/wallet.ts",
     "fund-check": "bun packages/sdk/fund-check.ts",
     "delegate-live-check": "bun packages/sdk/delegate-live-check.ts",
-    "send": "bun packages/sdk/send.ts"
+    "send": "bun packages/sdk/send.ts",
+    "evm-pay-check": "bun packages/sdk/evm-pay-check.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260907.1",

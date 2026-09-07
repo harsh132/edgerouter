@@ -25,6 +25,12 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { generateWallet, openWallet, type LocalWallet, type WalletMaterial } from './local';
+import {
+  generateEvmWallet,
+  openEvmWallet,
+  type EvmWallet,
+  type EvmWalletMaterial,
+} from './evm-local';
 import { HEDERA_TESTNET } from '../pay/hedera';
 
 export const defaultHome = (): string =>
@@ -115,3 +121,57 @@ export const describe = (path: string): string =>
   platform() === 'win32'
     ? `${path} (readable by your Windows user account; not encrypted)`
     : `${path} (mode 0600, your user only; not encrypted)`;
+
+/* --------------------------------------------------------------------- EVM */
+
+const readEvmMaterial = (path: string): EvmWalletMaterial | null => {
+  if (!existsSync(path)) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    throw new Error(`${path} exists but is not readable JSON; move it aside rather than losing it`);
+  }
+  const m = parsed as Record<string, unknown>;
+  if (
+    typeof m.privateKey !== 'string' ||
+    typeof m.address !== 'string' ||
+    typeof m.network !== 'string'
+  ) {
+    throw new Error(`${path} is not an edgerouter EVM wallet; move it aside rather than losing it`);
+  }
+  return { privateKey: m.privateKey, address: m.address, network: m.network };
+};
+
+export type EvmWalletHandle = {
+  wallet: EvmWallet;
+  path: string;
+  created: boolean;
+};
+
+/**
+ * Opens the EVM wallet for a chain, creating one the first time.
+ *
+ * No account id to write back, because an EVM address is the account. The file
+ * therefore never changes after it is written, which is one fewer moment at
+ * which a key file can be corrupted.
+ */
+export const loadOrCreateEvmWallet = (
+  options: { network: string; home?: string; rpcUrl?: string },
+): EvmWalletHandle => {
+  const path = walletPath(options.network, options.home ?? defaultHome());
+
+  const existing = readEvmMaterial(path);
+  const material = existing ?? generateEvmWallet(options.network);
+  if (!existing) write(path, material as unknown as WalletMaterial);
+
+  return {
+    wallet: openEvmWallet(material, options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
+    path,
+    created: existing === null,
+  };
+};
+
+/** True when a CAIP-2 identifier names an EVM chain rather than Hedera. */
+export const isEvmNetwork = (network: string): boolean => /^eip155:\d+$/.test(network);
