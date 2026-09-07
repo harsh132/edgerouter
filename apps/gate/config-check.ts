@@ -131,5 +131,32 @@ check(
 
 check(Boolean(vars.FACILITATOR_URL), 'a facilitator is configured; without one paid routes close');
 
+/*
+  Every network must have a facilitator that will actually settle it — its own,
+  or the gate's default. Checked live, because a facilitator that has stopped
+  supporting a chain is indistinguishable from one that never did, and the
+  symptom is a client that signs, pays attention, and is refused.
+*/
+for (const network of parsed.values()) {
+  const url = network.facilitatorUrl ?? vars.FACILITATOR_URL!;
+  let supported: string[] = [];
+  try {
+    // Joined, not resolved — see the note in x402.ts. A facilitator under a
+    // path is exactly the case this whole check exists for.
+    const response = await fetch(`${url.replace(/\/+$/, '')}/supported`);
+    const body = (await response.json()) as { kinds?: { scheme: string; network: string }[] };
+    supported = (body.kinds ?? [])
+      .filter((kind) => kind.scheme === 'exact')
+      .map((kind) => kind.network);
+  } catch (error) {
+    check(false, `${network.id}: could not reach ${url} (${(error as Error).message})`);
+    continue;
+  }
+  check(
+    supported.includes(network.id),
+    `${network.id} is settled by ${new URL(url).host}, which advertises it`,
+  );
+}
+
 console.log(failures === 0 ? '\nAll checks pass.' : `\n${failures} FAILED.`);
 if (failures > 0) process.exit(1);

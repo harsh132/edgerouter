@@ -48,6 +48,15 @@ export type NetworkConfig =
       /** Smallest asset units per USD minor unit. 1 for a six-decimal stablecoin. */
       unitsPerUsdMinor: bigint;
       maxTimeoutSeconds: number;
+      /**
+       * Which facilitator settles this network, when not the default one.
+       *
+       * Per network rather than per gate, because no facilitator settles
+       * everything and the ones that overlap do not overlap completely. A
+       * single global facilitator means the gate can only ever offer that
+       * facilitator's intersection with what it wants to accept.
+       */
+      facilitatorUrl?: string;
     }
   | {
       kind: 'hedera';
@@ -75,6 +84,8 @@ export type NetworkConfig =
        */
       unitsPerUsdMinor: bigint;
       maxTimeoutSeconds: number;
+      /** See the EVM variant. Same field, same reason. */
+      facilitatorUrl?: string;
     };
 
 export type NetworkId = string;
@@ -141,6 +152,15 @@ const narrow = (entry: unknown): NetworkConfig | null => {
     if (scale <= 0n) return null;
   }
 
+  /*
+    Refused rather than ignored when malformed. A network silently falling back
+    to the default facilitator is a network settling somewhere its operator did
+    not choose, which is exactly the failure this field exists to prevent.
+  */
+  const facilitatorUrl = str(e.facilitatorUrl);
+  if (e.facilitatorUrl !== undefined && !facilitatorUrl) return null;
+  if (facilitatorUrl && !/^https:\/\//.test(facilitatorUrl)) return null;
+
   if (e.kind === 'hedera') {
     const feePayer = str(e.feePayer);
     if (!feePayer) return null;
@@ -164,6 +184,7 @@ const narrow = (entry: unknown): NetworkConfig | null => {
       feePayer,
       unitsPerUsdMinor: scale ?? 1n,
       maxTimeoutSeconds: timeout ?? 180,
+      ...(facilitatorUrl ? { facilitatorUrl } : {}),
     };
   }
 
@@ -179,6 +200,7 @@ const narrow = (entry: unknown): NetworkConfig | null => {
       assetVersion: str(e.assetVersion) ?? '2',
       unitsPerUsdMinor: scale ?? 1n,
       maxTimeoutSeconds: timeout ?? 60,
+      ...(facilitatorUrl ? { facilitatorUrl } : {}),
     };
   }
 

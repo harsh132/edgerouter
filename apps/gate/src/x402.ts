@@ -275,7 +275,13 @@ const facilitatorCall = async (
 ): Promise<FacilitatorResult> => {
   let response: Response;
   try {
-    response = await fetch(new URL(path, base), {
+    /*
+      Joined rather than resolved. `new URL('/verify', base)` discards any path
+      on the base, so a facilitator hosted under one — x402.org/facilitator, for
+      instance — would be called at the origin's root instead. That was
+      invisible while every configured facilitator lived at a bare origin.
+    */
+    response = await fetch(`${base.replace(/\/+$/, '')}${path}`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

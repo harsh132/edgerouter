@@ -8,18 +8,27 @@
   "vars": {
     // Verified live against https://api.testnet.blocky402.com/supported.
     //
-    // Two networks, and the reason Amoy was absent until now is worth keeping:
-    // its payTo was the zero address, so anyone choosing that network would
-    // have burned their payment. A network we cannot receive on is worse than
-    // one we do not offer — the client signs successfully, the facilitator
-    // settles successfully, and the money is gone. It is back because there is
-    // now a real address behind it.
+    // Two networks, each settled by whichever facilitator actually settles it.
     //
-    // The Amoy asset is Circle's testnet USDC. Its EIP-712 domain is read from
-    // the contract rather than assumed: name() returns "USDC" (not "USD Coin",
-    // which several other deployments use) and version() returns "2". A wrong
-    // domain produces a signature that verifies against nothing, and the error
-    // surfaces at the facilitator looking like a malformed payment.
+    // Blocky402 does Hedera, and is the only facilitator that does. It also
+    // advertises Polygon Amoy, but its Amoy leg does not work: /verify answers
+    // `transaction_simulation_failed` for every payload, including ones that
+    // simulate cleanly on a public RPC from Blocky402's own signer address, and
+    // including deliberately broken quotes whose specific failures its own code
+    // has distinct reasons for. A generic answer to every input is what a
+    // facilitator whose chain reads are failing looks like. So Amoy is not
+    // offered: a network we cannot settle on is worse than one we do not list,
+    // because the client signs, waits, and is refused after doing the work.
+    //
+    // Base Sepolia settles through x402.org's facilitator instead, which is why
+    // facilitatorUrl is per network rather than per gate. No facilitator covers
+    // everything, and the ones that overlap do not overlap completely.
+    //
+    // Both EIP-712 domains are read from the contract rather than assumed:
+    // name() returns "USDC" (not "USD Coin", which several other deployments
+    // use) and version() returns "2". A wrong domain produces a signature that
+    // verifies against nothing, and surfaces at the facilitator looking like a
+    // malformed payment rather than a wrong domain.
     //
     // Hedera uses HBAR (0.0.0) rather than an HTS token, because HTS transfers
     // additionally require the payer's account to be *associated* with the
@@ -35,7 +44,7 @@
     // is ~1234 tinybars. It is a fixed number rather than an oracle read, which
     // means the quote drifts as the price moves — acceptable on testnet, not on
     // mainnet.
-    "NETWORKS": "[{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.10400448\",\"feePayer\":\"0.0.7162784\",\"unitsPerUsdMinor\":\"1234\"},{\"kind\":\"evm\",\"id\":\"eip155:80002\",\"asset\":\"0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582\",\"payTo\":\"0x3f870ECEEE0EcE3a54254C1D364230ABd14aa2d3\",\"assetName\":\"USDC\",\"assetVersion\":\"2\",\"unitsPerUsdMinor\":\"1\"}]",
+    "NETWORKS": "[{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.10400448\",\"feePayer\":\"0.0.7162784\",\"unitsPerUsdMinor\":\"1234\"},{\"kind\":\"evm\",\"id\":\"eip155:84532\",\"asset\":\"0x036CbD53842c5426634e7929541eC2318f3dCF7e\",\"payTo\":\"0x3f870ECEEE0EcE3a54254C1D364230ABd14aa2d3\",\"assetName\":\"USDC\",\"assetVersion\":\"2\",\"unitsPerUsdMinor\":\"1\",\"facilitatorUrl\":\"https://x402.org/facilitator\"}]",
     "DEFAULT_NETWORK": "hedera:testnet",
     // Public, so it is a var rather than a secret. Which facilitator settles
     // our payments is not a thing to hide, and hiding it would mean nobody can

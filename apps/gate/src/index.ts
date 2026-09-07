@@ -227,7 +227,19 @@ const handleCompletion = async (request: Request, env: Env): Promise<Response> =
     return refuse('payment_mismatch', 'payment terms do not match the quote', 402);
   }
 
-  const facilitator = { url: env.FACILITATOR_URL, ...(env.FACILITATOR_API_KEY ? { apiKey: env.FACILITATOR_API_KEY } : {}) };
+  /*
+    Per network, falling back to the gate's default.
+
+    No facilitator settles every chain, and the ones that overlap do not
+    overlap completely — so a single global facilitator caps what this gate can
+    accept at that facilitator's own coverage. Naming one per network is what
+    lets Hedera settle through the facilitator that does Hedera well while an
+    EVM chain settles through one that does not do Hedera at all.
+  */
+  const facilitator = {
+    url: network.facilitatorUrl ?? env.FACILITATOR_URL,
+    ...(env.FACILITATOR_API_KEY ? { apiKey: env.FACILITATOR_API_KEY } : {}),
+  };
 
   /*
     Three timings, logged rather than returned. Which of the three dominates
