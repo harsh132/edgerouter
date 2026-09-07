@@ -28,15 +28,32 @@ subtree; a valid token over an empty balance is harmless.
 
 ```
 packages/core   attenuation algebra + funding rules   no dependencies
+apps/gate       the x402 gate — a stateless Cloudflare Worker
 docs/           product thesis, build plan, verified findings, MCP spec
 ```
+
+## The gate
+
+An OpenAI-compatible endpoint behind x402. Point any existing client at it and
+pass a capability where the API key goes:
+
+```
+verify capability  →  price the request  →  check the policy
+→  402 or accept payment  →  proxy upstream  →  settle
+```
+
+Stateless: no database, no session, no account. A capability is a signature
+chain recomputed from a key derived per root, and payment is verified by a
+facilitator, so nothing needs remembering between requests.
 
 ## Checks
 
 ```bash
-bun packages/core/check.ts        # property tests, seed 1
+bun run check                     # core property tests + gate logic
 bun packages/core/check.ts 42     # any seed; failures print the seed to reproduce
-bunx tsc --noEmit
+bun run dev                       # wrangler dev on :8787
+bun run smoke                     # end-to-end against a running gate
+bun run typecheck
 ```
 
 `packages/core` has no dependencies on purpose. The claim the whole product
@@ -45,5 +62,7 @@ trees and random caveat orders, with no network, no chain, and no API key.
 
 ## Status
 
-Early. `packages/core` is done and tested. Everything else is in
+Early. `packages/core` and `apps/gate` are done and tested — 34 property
+checks, 33 gate checks, 14 end-to-end against a live Worker. Payment settlement
+has never run against a real facilitator. Everything else is in
 [docs/PROJECTS.md](docs/PROJECTS.md).

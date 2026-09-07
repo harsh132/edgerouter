@@ -9,7 +9,7 @@
     "exactOptionalPropertyTypes": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["node", "@cloudflare/workers-types"]
   },
   "include": ["packages/**/*.ts", "apps/**/*.ts"]
 }
