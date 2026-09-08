@@ -187,7 +187,17 @@ export const registerSidebarTab = (ctx: Context): void => {
       // matter more than the tools the user opened the sidebar for.
       order: 120,
       single: true,
-      component: ({ ctx: tabCtx, scope }) => h(Panel, { ctx: tabCtx, sessionId: scope.sessionId }),
+      /*
+        This plugin's own context, not the one the tab is handed.
+
+        Cordis gates service access per context: a context may only read
+        services it declared in `inject`. The sidebar hands its tabs *its*
+        context, which never asked for `settingsScope`, so reading settings
+        through it throws — "cannot get property settingsScope without inject",
+        rendered in place of the panel. The context that did ask for it is the
+        one this plugin was applied with, and it is in scope here.
+      */
+      component: ({ scope }) => h(Panel, { ctx, sessionId: scope.sessionId }),
     });
   });
 };
