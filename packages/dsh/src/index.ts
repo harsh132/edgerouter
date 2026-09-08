@@ -138,6 +138,19 @@ export interface Config {
   withdrawTo?: string;
   /** Reported, not configured: how the last withdrawal went. */
   withdrawStatus?: string;
+
+  /**
+   * Whether this session claims an ENS name.
+   *
+   * Off by default, and that is not timidity: minting costs Sepolia gas, and a
+   * provider that spends money the user did not ask it to spend is the exact
+   * thing this project exists to argue against. Turning it on is the ask.
+   */
+  ensNames?: boolean;
+  /** Reported, not configured: this session's name, once it has one. */
+  ensName?: string;
+  /** Reported, not configured: what the naming attempt did or why it did not. */
+  ensStatus?: string;
 }
 
 export const Config: z<Config> = z.object({
@@ -160,6 +173,13 @@ export const Config: z<Config> = z.object({
     .string()
     .description('Setting this sends the whole balance there, once. Cleared by the plugin.'),
   withdrawStatus: z.string().description('Reported by the plugin.'),
+
+  ensNames: z
+    .boolean()
+    .default(false)
+    .description('Claim an ENS name for this session. Costs Sepolia gas the first time.'),
+  ensName: z.string().description('Reported by the plugin.'),
+  ensStatus: z.string().description('Reported by the plugin.'),
 });
 
 /**
@@ -422,6 +442,14 @@ export function apply(ctx: Context, config: Config): void {
   */
   const reporter = createReporter();
 
+  /*
+    A second reporter, for the same reason as the first: naming finishes at an
+    unpredictable moment, generally before the settings service exists, and a
+    report that arrives before anything is listening must not be dropped.
+  */
+  const nameReporter = createReporter();
+  const reportName = (name: string, status: string) => nameReporter.publish(name, status);
+
   /**
    * The same, for an EVM chain.
    *
@@ -660,6 +688,53 @@ export function apply(ctx: Context, config: Config): void {
     }
   };
 
+  /**
+   * Claims this session's ENS name, if asked to.
+   *
+   * Deliberately not part of `start()`. Naming is slow — a read against
+   * Sepolia, and on the first run a transaction and a block — and payment must
+   * not wait on it. A session with no name pays exactly as it did before;
+   * naming is something that becomes true a few seconds later, or does not.
+   *
+   * Also deliberately off by default. Minting costs gas from the user's wallet,
+   * and a provider that spends money nobody asked it to spend is the thing this
+   * project exists to argue against.
+   */
+  const claimName = async (): Promise<void> => {
+    if (!current().ensNames) return;
+
+    try {
+      // Imported here rather than at the top: a profile that never turns naming
+      // on should not pay to load an ENS client and a chain's worth of ABIs.
+      const { ensureSessionName, openEnsSigner } = await import('../../ens/src/index');
+      const signer = openEnsSigner();
+
+      const gas = await signer.public.getBalance({ address: signer.address });
+      if (gas === 0n) {
+        reportName('', `no Sepolia ETH at ${signer.address}, so no name can be claimed`);
+        return;
+      }
+
+      const session = await ensureSessionName(
+        { public: signer.public, wallet: signer.wallet },
+        { owner: signer.address, gate: current().baseURL ?? DEFAULT_BASE_URL },
+      );
+
+      reportName(
+        session.name,
+        session.minted ? `minted — ${session.registerHash}` : 'already registered',
+      );
+      ctx.logger.info(
+        `llm-edgerouter: this session is ${session.name}` +
+          (session.minted ? ' (newly minted)' : ''),
+      );
+    } catch (error) {
+      const message = (error as Error).message;
+      reportName('', `could not claim a name: ${message}`);
+      ctx.logger.warn(`llm-edgerouter: could not claim an ENS name — ${message}`);
+    }
+  };
+
   /*
     Started last, after everything it publishes into exists.
 
@@ -669,6 +744,7 @@ export function apply(ctx: Context, config: Config): void {
     that moves one would turn it into a use-before-declaration at runtime.
   */
   void start();
+  void claimName();
   ctx.llm.registerAdapter([PROVIDER], adapter);
 
   /*
@@ -745,6 +821,16 @@ export function apply(ctx: Context, config: Config): void {
       }
     };
 
+    nameReporter.attach((ensName, ensStatus) => {
+      void settingsCtx.settings
+        .update(NS, { ensName, ensStatus })
+        .catch((error: unknown) =>
+          ctx.logger.warn(
+            `llm-edgerouter: could not report the ENS name into settings: ${(error as Error).message}`,
+          ),
+        );
+    });
+
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
       setSource: (source) => {
         current = source;
@@ -765,6 +851,10 @@ export function apply(ctx: Context, config: Config): void {
           again rather than be read afresh next call.
         */
         void start();
+        // Turning naming on should not need a restart to take effect. Turning
+        // it off leaves the name alone: it is registered on a public chain and
+        // a settings toggle does not un-register anything.
+        void claimName();
       },
     });
   });

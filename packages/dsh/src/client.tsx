@@ -51,6 +51,12 @@ type Section = {
   withdrawTo?: string;
   /** Reported by the Node half: how the last withdrawal went. */
   withdrawStatus?: string;
+  /** Whether this session claims an ENS name. Costs gas the first time. */
+  ensNames?: boolean;
+  /** Reported by the Node half: this session's name. */
+  ensName?: string;
+  /** Reported by the Node half: what the naming attempt did. */
+  ensStatus?: string;
 };
 
 /**
@@ -270,6 +276,68 @@ const Withdraw = ({
   ]);
 };
 
+/**
+ * This session's public name.
+ *
+ * The address above says where the money is. This says who is spending it —
+ * and unlike the address, it is a name a person can read out, and one that the
+ * budget authority checks before it signs anything. Revoking the name stops the
+ * spending, which is why this is a section rather than a footnote.
+ *
+ * The toggle is off until asked, because claiming a name costs Sepolia gas from
+ * the same wallet. A provider that spends money nobody asked it to spend is the
+ * thing this whole project argues against, so the first mint is a decision.
+ */
+const Naming = ({
+  scope,
+  enabled,
+  name,
+  status,
+}: {
+  scope: { set(field: string, value: unknown): Promise<void> };
+  enabled: boolean;
+  name: string;
+  status: string;
+}): ReactNode =>
+  h('div', { style: style.card }, [
+    h('div', { key: 'l', style: style.label }, 'Name'),
+    ...(name
+      ? [
+          h('div', { key: 'n', style: style.address }, name),
+          h('p', { key: 's', style: style.note }, status),
+        ]
+      : [
+          h(
+            'p',
+            { key: 'n', style: style.note },
+            enabled
+              ? status || 'Claiming a name…'
+              : 'This session can claim an ENS name, which is what the budget authority ' +
+                  'checks before it signs a payment. Sub-agents get names beneath it, so ' +
+                  'revoking one stops everything under it too.',
+          ),
+        ]),
+    h(
+      'div',
+      { key: 'r', style: style.row },
+      [
+        h(
+          'button',
+          {
+            key: 'b',
+            type: 'button',
+            style: style.button,
+            onClick: () => void scope.set('ensNames', !enabled),
+          },
+          enabled ? 'Stop claiming names' : 'Claim a name',
+        ),
+        ...(enabled && !name
+          ? [h('span', { key: 'g', style: style.note }, 'Needs Sepolia ETH for gas.')]
+          : []),
+      ],
+    ),
+  ]);
+
 const Page = ({ ctx }: { ctx: Context }): ReactNode => {
   const scope = ctx.settingsScope.bind<Section>({ namespace: NS });
   const snapshot = useSyncExternalStore(
@@ -343,6 +411,14 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
       ]),
       h('p', { key: 'status', style: style.note }, status),
     ]),
+
+    h(Naming, {
+      key: 'naming',
+      scope,
+      enabled: Boolean(section.ensNames),
+      name: section.ensName ?? '',
+      status: section.ensStatus ?? '',
+    }),
 
     /*
       Only once there is something to withdraw. An unfunded wallet has a balance
