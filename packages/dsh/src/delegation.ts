@@ -57,7 +57,14 @@ export type DelegationState = {
 export type DelegationOptions = {
   signer: PaymentSigner;
   network: string;
-  /** What the root node starts with, in the asset's smallest unit. */
+  /**
+   * What the root node starts with, in the asset's smallest unit.
+   *
+   * Bounded by the caller against the wallet's real balance. Nothing here can
+   * check that — the authority does accounting, and the wallet is the only
+   * thing that knows what it holds — so a caller handing over more than exists
+   * gets a tree that promises money nobody has.
+   */
   fundedMinor: bigint;
   /** Names each allowance is checked against before it may spend. */
   names?: NameGuard;
@@ -109,7 +116,14 @@ export const startDelegation = async (options: DelegationOptions): Promise<Deleg
   const view = (): DelegationState => ({
     running: true,
     url: served.url,
-    status: `holding ${formatAmount(options.network, options.fundedMinor)} for delegation`,
+    /*
+      What is left at the root, not what it started with. A figure that never
+      moves while allowances are cut from it is the least useful number on the
+      page — the question a reader has is how much is still theirs to give.
+    */
+    status:
+      `${formatAmount(options.network, authority.balances(ROOT_NODE)[0]?.balanceMinor ?? 0n)}` +
+      ` of ${formatAmount(options.network, options.fundedMinor)} left to delegate`,
     allowances: authority.balances(ROOT_NODE).map((node) => ({
       id: node.id,
       parent: node.parent,

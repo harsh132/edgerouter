@@ -127,5 +127,34 @@ const reachable = await fetch(`${delegation.url}/health`)
   .catch(() => false);
 check(!reachable, 'stopping closes the socket');
 
+/* ------------------------------------------------------- what the root shows */
+
+{
+  /*
+    The status line reports what is *left* at the root, not what it started
+    with. A figure that never moves while allowances are cut from it is the
+    least useful number on the page, and it was the first thing to look wrong in
+    a screenshot: "holding 20 hbar" beside a wallet holding two.
+  */
+  const another = await startDelegation({ signer, network: NETWORK, fundedMinor: 1_000n });
+  try {
+    check(another.view().status.startsWith('0.00001'), 'the root reports its whole budget at first', another.view().status);
+
+    await another.mint({ child: 'a', amountMinor: 600n, hours: 1 });
+    const after = another.view();
+    check(
+      after.status.includes('0.000004') && after.status.includes('of 0.00001'),
+      'and afterwards reports what is left, against what it began with',
+      after.status,
+    );
+    check(
+      after.allowances.find((node) => node.id === 'root')!.balanceMinor === '400',
+      'which matches the root node itself',
+    );
+  } finally {
+    await another.stop();
+  }
+}
+
 console.log(failures === 0 ? '\n  All checks pass.\n' : `\n  ${failures} FAILED.\n`);
 if (failures > 0) process.exit(1);

@@ -549,9 +549,30 @@ export function apply(ctx: Context, config: Config): void {
 
     try {
       const network = now.network ?? DEFAULT_NETWORK;
-      const budget = now.delegationBudget?.trim()
+
+      /*
+        The budget is an accounting fiction over one real wallet, so it has to
+        be bounded by what that wallet actually holds.
+
+        Without this the default — twenty times the per-call cap — happily
+        claimed twenty hbar against a wallet holding two, and every allowance
+        cut from it was a promise the wallet could not keep. The failure would
+        arrive at the worst moment and in the worst form: not a clean
+        `budget_exhausted` from the authority, which a sub-agent knows how to
+        stop on, but a signed payment the network rejects for insufficient
+        balance.
+
+        Clamping is the honest bound. It is still not a guarantee — the wallet
+        pays for this session's own calls too, and the balance moves under both
+        — but a ceiling of "what exists" beats a ceiling of "what was asked
+        for".
+      */
+      const asked = now.delegationBudget?.trim()
         ? BigInt(now.delegationBudget.trim())
         : maxAmount() * 20n;
+      const held = lastBalanceMinor ?? 0n;
+      const budget = held > 0n && asked > held ? held : asked;
+      const clamped = budget !== asked;
 
       /*
         The guard is attached only when naming is on. Without a name there is
@@ -569,6 +590,12 @@ export function apply(ctx: Context, config: Config): void {
         ...(names ? { names } : {}),
         log: (line) => ctx.logger.info(line),
       });
+      if (clamped) {
+        ctx.logger.info(
+          `llm-edgerouter: delegation budget capped at ${formatAmount(network, budget)} — ` +
+            `the wallet does not hold the ${formatAmount(network, asked)} that was asked for`,
+        );
+      }
       reportTree();
     } catch (error) {
       const message = (error as Error).message;
