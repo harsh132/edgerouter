@@ -78,7 +78,7 @@ export const ensureAgentName = async (
     parent?: string;
     owner: Address;
     subdelegate?: boolean;
-    budgetMinor?: bigint;
+    grantedMinor?: bigint;
     asset?: string;
     gate?: string;
     ens?: EnsClient;
@@ -116,7 +116,7 @@ export const ensureAgentName = async (
     parentRegistry,
     owner: params.owner,
     ...(params.subdelegate === undefined ? {} : { subdelegate: params.subdelegate }),
-    ...(params.budgetMinor === undefined ? {} : { budgetMinor: params.budgetMinor }),
+    ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
     ...(params.asset ? { asset: params.asset } : {}),
     ...(params.gate ? { gate: params.gate } : {}),
   });

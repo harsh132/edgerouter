@@ -36,7 +36,7 @@ import {
 import { registryAbi } from './abi';
 import { ensName } from './client';
 import { ALL_ROLES, deployRegistry, deployResolver } from './deploy';
-import { describeAgent } from './records';
+import { clearAddress, describeAgent } from './records';
 
 type Clients = { public: PublicClient; wallet: WalletClient };
 
@@ -83,7 +83,7 @@ export const mintAgentName = async (
     resolver?: Address;
     /** Whether this agent may mint names beneath itself. */
     subdelegate?: boolean;
-    budgetMinor?: bigint;
+    grantedMinor?: bigint;
     asset?: string;
     gate?: string;
     expiresAt?: number;
@@ -163,7 +163,7 @@ export const mintAgentName = async (
     resolver,
     name,
     address: params.address ?? owner,
-    ...(params.budgetMinor === undefined ? {} : { budgetMinor: params.budgetMinor }),
+    ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
     ...(params.asset ? { asset: params.asset } : {}),
     parent: ensName(params.parent),
     ...(params.gate ? { gate: params.gate } : {}),
@@ -183,25 +183,50 @@ export const mintAgentName = async (
 /**
  * Takes a name back.
  *
- * Clearing the subregistry rather than deleting anything: a name whose registry
- * pointer is gone stops resolving, and every name beneath it stops resolving
- * with it — one write revokes a subtree. That is the on-chain form of what the
- * authority already does when it empties a node, and it is why revocation here
- * needs no list of what was revoked.
+ * Two writes, and both are needed. That took two wrong versions to establish,
+ * so the reasoning is worth keeping:
+ *
+ * Clearing the subregistry — the first attempt — removes the registry a name
+ * *owns*. It stops everything beneath the name resolving and leaves the name
+ * itself resolving exactly as before. That revokes an agent's children, not the
+ * agent.
+ *
+ * `unregister` removes the registry entry, which ought to be enough and is not.
+ * Every name in this project points at one resolver per account, and records
+ * there are keyed by the full name. So after `unregister` the entry is gone,
+ * resolution falls back to the closest ancestor resolver — which is the same
+ * contract — and it still holds an address record for the full name. The name
+ * resolves, from a registry entry that no longer exists.
+ *
+ * So the address record is cleared first, and that is the write that actually
+ * revokes: `addressOf` returns nothing, and the guard refuses. `unregister`
+ * follows to remove the entry and, with it, any registry the name owned — so
+ * the agent's children go too.
+ *
+ * The order matters. Records first, because that is the half that stops the
+ * spending; if the second write fails, the allowance is still revoked.
+ *
+ * This is the public half of what the authority does when it empties a node.
+ * The authority's half is immediate and private; this one is verifiable by
+ * anyone with an RPC endpoint and outlives the process that performed it.
  */
 export const revokeAgentName = async (
   clients: Clients,
-  params: { parentRegistry: Address; label: string },
+  params: { parentRegistry: Address; label: string; name?: string; resolver?: Address },
 ): Promise<Hash> => {
+  if (params.name && params.resolver) {
+    await clearAddress(clients, { resolver: params.resolver, name: params.name });
+  }
+
   const anyId = labelIdOf(params.label);
-  const hash = await clients.wallet.writeContract({
+  const { request } = await clients.public.simulateContract({
     address: params.parentRegistry,
     abi: registryAbi,
-    functionName: 'setSubregistry',
-    args: [anyId, '0x0000000000000000000000000000000000000000'],
+    functionName: 'unregister',
+    args: [anyId],
     account: clients.wallet.account!,
-    chain: clients.wallet.chain!,
   });
+  const hash = await clients.wallet.writeContract(request);
   await clients.public.waitForTransactionReceipt({ hash });
   return hash;
 };

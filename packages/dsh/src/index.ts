@@ -971,7 +971,7 @@ export function apply(ctx: Context, config: Config): void {
               label,
               parent: sessionName,
               owner: ensSigner.address,
-              budgetMinor: amountMinor,
+              grantedMinor: amountMinor,
               asset: now.network ?? DEFAULT_NETWORK,
               gate: now.baseURL ?? DEFAULT_BASE_URL,
             },
@@ -993,7 +993,21 @@ export function apply(ctx: Context, config: Config): void {
       }
     };
 
-    /** Empties an allowance and everything beneath it. */
+    /**
+     * Empties an allowance and everything beneath it, in both places it lives.
+     *
+     * The authority's revocation is immediate and private: the node is emptied,
+     * so the capability buys nothing from this process. The registry's is
+     * slower and public: clearing the subregistry pointer stops the name — and
+     * every name beneath it — resolving, which any observer can verify and
+     * which survives this process being restarted, replaced, or disbelieved.
+     *
+     * Both, in that order. The budget is what actually stops the spending, so
+     * it goes first and a failure to reach Sepolia afterwards leaves the
+     * allowance revoked rather than half-revoked. The on-chain half is reported
+     * separately for the same reason: a user who is told "revoked" should not
+     * have to wonder which kind.
+     */
     const runRevoke = async (node: string): Promise<void> => {
       try {
         await settingsCtx.settings.update(NS, { delegateRevoke: '' });
@@ -1001,8 +1015,52 @@ export function apply(ctx: Context, config: Config): void {
 
         const recovered = await delegation.revoke(node);
         reportTree();
+
+        let onChain = '';
+        const now = current();
+        if (now.ensNames && node.endsWith('.eth')) {
+          try {
+            const { openEnsSigner, revokeAgentName, registryOf, createEnsClient } = await import(
+              '../../ens/src/index'
+            );
+            const ensSigner = openEnsSigner();
+            const [label, ...rest] = node.split('.');
+            const parentRegistry = await registryOf(ensSigner.public, rest.join('.'));
+            if (!parentRegistry) throw new Error('its parent owns no registry');
+
+            /*
+              The resolver is looked up rather than assumed: clearing the
+              address record is the write that actually revokes, and it has to
+              land on whichever resolver this name is served by.
+            */
+            const resolver = await createEnsClient().resolverOf(node);
+
+            const hash = await revokeAgentName(
+              { public: ensSigner.public, wallet: ensSigner.wallet },
+              {
+                parentRegistry,
+                label: label!,
+                name: node,
+                ...(resolver ? { resolver } : {}),
+              },
+            );
+            onChain = `, and the name was withdrawn on chain (${hash.slice(0, 12)}…)`;
+            ctx.logger.info(`llm-edgerouter: withdrew ${node} on chain — ${hash}`);
+          } catch (error) {
+            /*
+              Reported rather than raised. The money is already stopped; failing
+              the whole revocation because a chain was unreachable would be
+              telling the user nothing happened when the important half did.
+            */
+            onChain = `, but the name could not be withdrawn on chain: ${(error as Error).message}`;
+            ctx.logger.warn(
+              `llm-edgerouter: revoked ${node} locally but not on chain — ${(error as Error).message}`,
+            );
+          }
+        }
+
         await settingsCtx.settings.update(NS, {
-          delegationStatus: `revoked ${node}, recovering ${recovered.toString()}`,
+          delegationStatus: `revoked ${node}, recovering ${recovered.toString()}${onChain}`,
         });
       } catch (error) {
         const message = (error as Error).message;

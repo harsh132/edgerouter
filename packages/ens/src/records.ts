@@ -20,9 +20,11 @@
  *
  * The address record is the point: it is the account that actually pays, so a
  * name resolving to it names something that acts rather than something that
- * merely exists. The text records carry what the delegation tree knows —
- * budget, parent, gate — so an agent's allowance is legible to anything that
- * can resolve a name, without access to the authority that holds the money.
+ * merely exists. The text records carry what the delegation tree knows at mint
+ * time — what was granted, by whom, against which gate — so an agent's
+ * allowance is legible to anything that can resolve a name, without access to
+ * the authority that holds the money. What is *left* of that allowance is not
+ * here, because only the authority knows it.
  */
 import {
   concat,
@@ -46,8 +48,19 @@ export const ETH_COIN_TYPE = 60n;
  * every other application that might ever write to this name.
  */
 export const RECORD = {
-  /** Smallest units this agent may still spend, as a decimal string. */
-  budget: 'er.budget',
+  /**
+   * What this agent was granted at mint time, in the asset's smallest unit.
+   *
+   * Granted, not remaining — and the distinction is the honest one rather than
+   * a nicety. This record is written once and never updated as the agent
+   * spends, so calling it a balance would be a claim the chain cannot back. It
+   * is worse than stale after a restart: the authority's tree lives in memory,
+   * so the allowance may not exist at all while this record still stands.
+   *
+   * The remaining balance is the authority's to report, because the authority
+   * is the only thing that knows it.
+   */
+  granted: 'er.granted',
   /** The asset that budget is denominated in — a CAIP-19 identifier. */
   asset: 'er.asset',
   /** The name that delegated to this one. Empty at the root. */
@@ -101,6 +114,32 @@ export const setAddress = async (
   return hash;
 };
 
+/**
+ * Removes the address a name points at.
+ *
+ * An empty value rather than a zero address, because those mean different
+ * things: `0x000…0` is an address a name resolves *to*, and a resolver holding
+ * one answers with it. Empty bytes are the absence of a record, which is what
+ * makes `addressOf` return nothing — and nothing is what the guard refuses on.
+ *
+ * This is the operative write in a revocation. See `revokeAgentName`.
+ */
+export const clearAddress = async (
+  clients: Clients,
+  params: { resolver: Address; name: string; coinType?: bigint },
+): Promise<Hash> => {
+  const hash = await clients.wallet.writeContract({
+    address: params.resolver,
+    abi: permissionedResolverAbi,
+    functionName: 'setAddress',
+    args: [dnsEncode(params.name), params.coinType ?? ETH_COIN_TYPE, '0x'],
+    account: clients.wallet.account!,
+    chain: clients.wallet.chain!,
+  });
+  await clients.public.waitForTransactionReceipt({ hash });
+  return hash;
+};
+
 /** Writes one text record. */
 export const setText = async (
   clients: Clients,
@@ -123,7 +162,7 @@ export const setText = async (
  *
  * Sequential rather than batched, because each is its own transaction on this
  * deployment and a partial write is legible: a name with an address and no
- * budget is an agent that exists and has been granted nothing, which is a true
+ * grant is an agent that exists and has been given nothing, which is a true
  * statement about a failed mint.
  */
 export const describeAgent = async (
@@ -132,7 +171,7 @@ export const describeAgent = async (
     resolver: Address;
     name: string;
     address: Address;
-    budgetMinor?: bigint;
+    grantedMinor?: bigint;
     asset?: string;
     parent?: string;
     gate?: string;
@@ -146,9 +185,9 @@ export const describeAgent = async (
   });
 
   const entries: [string, string][] = [
-    ...(params.budgetMinor === undefined
+    ...(params.grantedMinor === undefined
       ? []
-      : ([[RECORD.budget, params.budgetMinor.toString()]] as [string, string][])),
+      : ([[RECORD.granted, params.grantedMinor.toString()]] as [string, string][])),
     ...(params.asset ? ([[RECORD.asset, params.asset]] as [string, string][]) : []),
     ...(params.parent ? ([[RECORD.parent, params.parent]] as [string, string][]) : []),
     ...(params.gate ? ([[RECORD.gate, params.gate]] as [string, string][]) : []),

@@ -43,6 +43,7 @@ export const registryAbi = parseAbi([
   'function getResolver(string label) view returns (address)',
   'function getParent() view returns (address parent, string label)',
   'function register(string label, address owner, address registry, address resolver, uint256 roleBitmap, uint64 expires) returns (uint256 tokenId)',
+  'function unregister(uint256 anyId)',
   'function setResolver(uint256 anyId, address resolver)',
   'function setSubregistry(uint256 anyId, address registry)',
   'function grantRoles(uint256 anyId, uint256 roleBitmap, address account)',
