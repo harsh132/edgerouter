@@ -7,7 +7,7 @@
     "apps/*"
   ],
   "scripts": {
-    "check": "bun packages/core/check.ts && bun packages/sdk/check.ts && bun packages/sdk/wallet-check.ts && bun packages/sdk/evm-check.ts && bun packages/sdk/delegate-check.ts && bun packages/dsh/check.ts && bun packages/dsh/delegation-check.ts && bun apps/gate/check.ts && bun apps/gate/config-check.ts",
+    "check": "bun packages/core/check.ts && bun packages/sdk/check.ts && bun packages/sdk/wallet-check.ts && bun packages/sdk/evm-check.ts && bun packages/sdk/composite-check.ts && bun packages/sdk/delegate-check.ts && bun packages/dsh/check.ts && bun packages/dsh/delegation-check.ts && bun apps/gate/check.ts && bun apps/gate/config-check.ts",
     "smoke": "bun apps/gate/smoke.ts",
     "dev": "wrangler dev --config apps/gate/wrangler.jsonc",
     "typecheck": "tsc --noEmit",
@@ -15,6 +15,7 @@
     "pay-check": "bun packages/sdk/pay-check.ts",
     "live-check": "bun packages/dsh/live-check.ts",
     "arc-check": "bun packages/sdk/arc-check.ts",
+    "composite-check": "bun packages/sdk/composite-check.ts",
     "ens-check": "bun packages/ens/live-check.ts",
     "ens-guard-check": "bun packages/ens/guard-live-check.ts",
     "ens-revoke-check": "bun packages/ens/revoke-live-check.ts",

@@ -31,6 +31,7 @@
  * signers rather than a chain id.
  */
 import { ExactEvmScheme } from '@x402/evm';
+import { BatchEvmScheme, CompositeEvmScheme } from '@circle-fin/x402-batching/client';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { PaymentRequirements, PaymentSigner } from './types';
 
@@ -105,7 +106,27 @@ export const evmSigner = (params: {
   chainIdOf(network);
 
   const account = privateKeyToAccount(parseEvmPrivateKey(params.privateKey));
-  const scheme = new ExactEvmScheme(account);
+
+  /*
+    Two schemes, one signer, dispatched per quote.
+
+    A gate can quote the same chain two ways. A plain quote is an EIP-3009
+    authorization bound to the *token*; a Circle Gateway quote is the same
+    signature bound to the *GatewayWallet*, and carries `extra.verifyingContract`
+    to say so. The two are not interchangeable — a signature made for one is
+    rejected by the other, and rejected as a malformed payment rather than as a
+    wrong domain, which is the least helpful way to learn about it.
+
+    `CompositeEvmScheme` is Circle's own answer to this: both schemes claim
+    `exact` on `eip155:*`, so registering them separately means one silently
+    shadows the other. It registers once and reads the requirements to decide.
+    Using theirs rather than writing the dispatch keeps the definition of "is
+    this a batched quote" in the hands of the people who answer it.
+  */
+  const scheme = new CompositeEvmScheme(
+    new BatchEvmScheme(account as never),
+    new ExactEvmScheme(account) as never,
+  );
 
   return {
     network,
