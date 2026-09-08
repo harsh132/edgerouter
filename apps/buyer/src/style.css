@@ -1,0 +1,58 @@
+/*
+  One column, dark, and deliberately plain. The page has one argument to make
+  and every ornament competes with it.
+*/
+:root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --card: #151b23;
+  --line: rgba(128, 128, 128, 0.25);
+  --text: #e6edf3;
+  --dim: rgba(230, 237, 243, 0.62);
+  --accent: #3fb950;
+  --danger: #e5534b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+main { max-width: 680px; margin: 0 auto; padding: 40px 20px 80px; }
+h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: -0.01em; }
+h2 { margin: 0 0 12px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--dim); font-weight: 600; }
+.lead { margin: 0 0 28px; color: var(--dim); }
+
+.card { border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 20px; background: var(--card); }
+.addr { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; margin-bottom: 8px; }
+.note { margin: 8px 0 0; font-size: 13px; color: var(--dim); }
+.error { margin: 12px 0 0; font-size: 13px; color: var(--danger); word-break: break-word; }
+
+.rows { display: flex; gap: 28px; margin: 14px 0; flex-wrap: wrap; }
+.rows > div { display: flex; flex-direction: column; gap: 2px; }
+.label { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
+.value { font-size: 20px; font-variant-numeric: tabular-nums; }
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+
+button, .row a {
+  padding: 7px 13px; border-radius: 7px; border: 1px solid var(--line);
+  background: transparent; color: inherit; font: inherit; cursor: pointer; text-decoration: none;
+}
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { border-color: var(--accent); color: var(--accent); }
+
+textarea {
+  width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: transparent; color: inherit; font: inherit; resize: vertical;
+}
+
+.steps { margin: 16px 0 0; padding-left: 20px; font-size: 14px; color: var(--dim); }
+.steps li { margin: 3px 0; }
+
+.answer { margin-top: 16px; padding: 14px; border-radius: 8px; border: 1px solid var(--line); }
+.answer p:first-child { margin: 0; }
