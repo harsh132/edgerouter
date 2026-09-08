@@ -26,6 +26,7 @@
     "evm-pay-check": "bun packages/sdk/evm-pay-check.ts"
   },
   "devDependencies": {
+    "@circle-fin/x402-batching": "^3.4.0",
     "@cloudflare/workers-types": "^5.20260907.1",
     "@types/node": "^26.4.1",
     "typescript": "^5.7.2",
