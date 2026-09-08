@@ -140,17 +140,40 @@ console.log(`  payload          ${JSON.stringify(payload.payload).slice(0, 140)}
   that cannot be settled is what we already had.
 */
 const { BatchFacilitatorClient } = await import('@circle-fin/x402-batching/server');
-const facilitator = new BatchFacilitatorClient();
+/*
+  Testnet, explicitly. The facilitator client defaults to
+  `https://gateway-api.circle.com`, which is mainnet, and answers
+  `unsupported_network` for Arc testnet — a correct answer to the wrong
+  question. The client SDK carries the testnet base URL; the server half does
+  not default to it.
+*/
+const facilitator = new BatchFacilitatorClient({ url: 'https://gateway-api-testnet.circle.com' });
+
+/*
+  `resource` and `accepted` are optional in the published types and required by
+  the API — verify answers 400 without them. `accepted` is the requirements the
+  buyer agreed to, which the Gateway re-derives the payment from rather than
+  trusting the payload alone; `resource` is what was being bought.
+*/
+const envelope = {
+  ...payload,
+  resource: {
+    url: 'https://edgerouter-gate.prakashharsh32.workers.dev/v1/chat/completions',
+    description: 'edgerouter inference',
+    mimeType: 'application/json',
+  },
+  accepted: requirements,
+};
 
 const verified = await facilitator.verify(
-  payload as never,
+  envelope as never,
   requirements as never,
 );
 console.log('  verify           ', JSON.stringify(verified).slice(0, 200));
 check((verified as { isValid?: boolean }).isValid === true, 'the Gateway verifies the payment');
 
 const settled = await facilitator.settle(
-  payload as never,
+  envelope as never,
   requirements as never,
 );
 console.log('  settle           ', JSON.stringify(settled).slice(0, 240));
