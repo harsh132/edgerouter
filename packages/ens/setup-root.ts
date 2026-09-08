@@ -41,7 +41,7 @@ const resolver = await deployResolver(clients, { owner: signer.address });
 say(`\n  resolver   ${resolver.address}`);
 say(`             ${resolver.hash ?? 'already deployed'}`);
 
-const registry = await deployRegistry(clients, { name });
+const registry = await deployRegistry(clients, { name, owner: signer.address, version: 1n });
 say(`  registry   ${registry.address}`);
 say(`             ${registry.hash ?? 'already deployed'}`);
 

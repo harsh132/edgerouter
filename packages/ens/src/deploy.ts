@@ -185,27 +185,39 @@ export const deployResolver = async (
     }),
   });
 
+const registryInitAbi = parseAbi([
+  'struct Grant { address account; uint256 roleBitmap; }',
+  'function initialize(Grant[] grants)',
+]);
+
 /**
  * Deploys the registry that will hold one name's subnames.
  *
- * No initialisation data, and that is not an omission. `UserRegistryImpl` has
- * no `initialize` function at all — confirmed by reading the selectors out of
- * its deployed bytecode, after every plausible signature reverted identically.
- * The factory calls `initialize` on the *proxy*, which forwards nothing when
- * the data is empty, and ownership follows from having deployed it.
+ * The initialiser takes grants and nothing else. The published guide describes
+ * `initialize(address rootAccount, uint256 roleBitmap)`, and that function is
+ * on no contract in this deployment — every plausible two-argument form was
+ * checked against the bytecode before this one was found. The difference is not
+ * cosmetic: deploying with the documented data reverts, and deploying with
+ * *empty* data succeeds and yields a registry nobody holds a role on, which is
+ * worse. Such a registry accepts no `register`, cannot be granted roles
+ * afterwards, and burns its salt permanently — the name it was deployed for
+ * needs a new version to get a usable one.
  *
- * That asymmetry with the resolver is worth stating: a resolver is initialised
- * with grants because its permissions are per-record, while a registry's are
- * per-name and handed out later, one `register` at a time.
+ * So the grant is made here, at deployment, where it is the only chance to
+ * make it.
  */
 export const deployRegistry = async (
   clients: Clients,
-  options: { name: string; version?: bigint },
+  options: { name: string; owner: Address; version?: bigint },
 ): Promise<{ address: Address; hash: Hash | null }> =>
   deployProxy(clients, {
     implementation: ENS.userRegistryImpl,
     salt: registrySaltFor(options.name, options.version ?? 0n),
-    data: '0x',
+    data: encodeFunctionData({
+      abi: registryInitAbi,
+      functionName: 'initialize',
+      args: [[{ account: options.owner, roleBitmap: ALL_ROLES }]],
+    }),
   });
 
 /**

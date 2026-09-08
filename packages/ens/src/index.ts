@@ -14,3 +14,4 @@ export * from './register';
 export * from './wallet';
 export * from './deploy';
 export * from './records';
+export * from './agent';
