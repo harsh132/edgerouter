@@ -62,6 +62,9 @@ type Section = {
   ensChatName?: string;
   ensChatStatus?: string;
 
+  /** A command: USDC to deposit into Circle's Gateway. Cleared by the Node half. */
+  depositAmount?: string;
+
   delegation?: boolean;
   delegationUrl?: string;
   delegationStatus?: string;
@@ -385,6 +388,77 @@ const Naming = ({
   ]);
 
 /**
+ * Moving money into Circle's Gateway.
+ *
+ * Only rendered on a network that pays that way, because everywhere else there
+ * is nothing to deposit into and the control would be a question with no
+ * meaning.
+ *
+ * It is the one piece of setup this project cannot make disappear. Elsewhere
+ * funding an address is the whole story; here paying draws on a balance held by
+ * the GatewayWallet contract, so an address holding twenty USDC and nothing
+ * deposited can pay for exactly nothing — which is worth saying plainly rather
+ * than leaving to be discovered through a refusal.
+ */
+const Deposit = ({
+  scope,
+  pending,
+  status,
+}: {
+  scope: { set(field: string, value: unknown): Promise<void> };
+  pending: boolean;
+  status: string;
+}): ReactNode => {
+  const [amount, setAmount] = useState('0.5');
+  const ready = /^\d+(\.\d+)?$/.test(amount) && Number(amount) > 0 && !pending;
+
+  return h('div', { style: style.card }, [
+    h('div', { key: 'l', style: style.label }, 'Gateway balance'),
+    h(
+      'p',
+      { key: 'n', style: style.note },
+      'This network pays through Circle Gateway, which draws on a balance you ' +
+        'deposit rather than on the address itself. Fund the address first, then ' +
+        'deposit — payment comes out of the deposit.',
+    ),
+    h('div', { key: 'r', style: style.row }, [
+      h('input', {
+        key: 'a',
+        style: { ...style.input, flex: '0 1 120px' },
+        value: amount,
+        placeholder: '0.5',
+        spellCheck: false,
+        disabled: pending,
+        onChange: (event: { target: { value: string } }) => setAmount(event.target.value),
+      }),
+      h(
+        'button',
+        {
+          key: 'go',
+          type: 'button',
+          disabled: !ready,
+          style: ready ? style.button : { ...style.button, ...style.disabled },
+          onClick: () => void scope.set('depositAmount', amount),
+        },
+        pending ? 'Depositing…' : 'Deposit USDC',
+      ),
+      h(
+        'a',
+        {
+          key: 'f',
+          href: 'https://faucet.circle.com',
+          target: '_blank',
+          rel: 'noreferrer',
+          style: style.button,
+        },
+        'Circle faucet',
+      ),
+    ]),
+    ...(status ? [h('p', { key: 's', style: style.note }, status)] : []),
+  ]);
+};
+
+/**
  * Allowances handed to sub-agents.
  *
  * The half of this project that has been real for weeks and invisible the whole
@@ -660,6 +734,22 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
       ]),
       h('p', { key: 'status', style: style.note }, status),
     ]),
+
+    /*
+      Gateway networks only. The list is short and explicit rather than derived,
+      because "Circle supports this chain" and "our gate quotes it through
+      Gateway" are different claims — Base is the former and not the latter.
+    */
+    ...(section.network === 'eip155:5042002'
+      ? [
+          h(Deposit, {
+            key: 'deposit',
+            scope,
+            pending: Boolean(section.depositAmount),
+            status,
+          }),
+        ]
+      : []),
 
     h(Delegation, {
       key: 'delegation',

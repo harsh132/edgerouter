@@ -16,3 +16,4 @@ export * from './delegate/authority';
 export * from './delegate/server';
 export * from './delegate/client';
 export * from './delegate/node-server';
+export * from './wallet/gateway';

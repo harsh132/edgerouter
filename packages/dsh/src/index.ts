@@ -45,6 +45,9 @@ import {
   isEvmNetwork,
   loadOrCreateEvmWallet,
   loadOrCreateWallet,
+  isGatewayNetwork,
+  gatewayFunding,
+  depositToGateway,
   type EvmWallet,
   type LocalWallet,
   type PaymentSigner,
@@ -180,6 +183,15 @@ export interface Config {
   delegationTree?: string;
 
   /**
+   * A command: how much USDC to deposit into Circle's Gateway, as a decimal
+   * string. Cleared once acted on.
+   *
+   * Only meaningful on a Gateway network. Elsewhere paying draws on the
+   * address directly and there is nothing to deposit into.
+   */
+  depositAmount?: string;
+
+  /**
    * A command: `label|amountMinor|hours`. Cleared once acted on.
    *
    * Three fields in a string because settings carry scalars, and a mint needs
@@ -237,6 +249,9 @@ export const Config: z<Config> = z.object({
   delegationUrl: z.string().description('Reported by the plugin.'),
   delegationStatus: z.string().description('Reported by the plugin.'),
   delegationTree: z.string().description('Reported by the plugin.'),
+  depositAmount: z
+    .string()
+    .description('USDC to deposit into Circle Gateway, as a decimal. Cleared by the plugin.'),
   delegateMint: z.string().description('label|amountMinor|hours. Cleared by the plugin.'),
   delegateRevoke: z.string().description('An allowance to revoke. Cleared by the plugin.'),
   delegateCapability: z.string().description('Shown once by the plugin, then cleared.'),
@@ -710,8 +725,92 @@ export function apply(ctx: Context, config: Config): void {
    * address always exists — so the only question is whether anyone has sent it
    * the token the gate quotes, and the message says exactly that.
    */
+  /**
+   * Funding, as a Gateway network measures it.
+   *
+   * Reports both numbers because they mean different things and the difference
+   * is the whole user-facing story: money at the address is one step from
+   * spendable, money in the Gateway is spendable now. Saying only "cannot pay"
+   * would hide which step is missing.
+   */
+  const checkGatewayFunding = async (announce: boolean): Promise<void> => {
+    if (!evmWallet) return;
+    try {
+      const funding = await gatewayFunding({
+        privateKey: evmWallet.exportPrivateKey(),
+        network: evmWallet.network,
+        address: evmWallet.address,
+      });
+      lastBalanceMinor = funding.availableMinor;
+
+      if (!funding.canPay) {
+        signer = undefined;
+        const held = formatAmount(evmWallet.network, funding.walletMinor);
+        unavailable =
+          funding.walletMinor > 0n
+            ? [
+                `this wallet holds ${held} but has deposited none of it.`,
+                ``,
+                'Circle Gateway pays from a deposited balance, not from the address',
+                'directly. Deposit in Settings, or with:',
+                ``,
+                `  npx dsh-plugin-edgerouter deposit --network ${evmWallet.network}`,
+              ].join('\n')
+            : [
+                'this wallet holds no USDC yet.',
+                ``,
+                `  Send USDC to  ${evmWallet.address}`,
+                `  Get some at   https://faucet.circle.com`,
+                ``,
+                'Then deposit it into the Gateway, which is what payment is drawn from.',
+              ].join('\n');
+
+        publish(
+          evmWallet.address,
+          funding.walletMinor > 0n
+            ? `holds ${held}, none deposited — deposit to start paying`
+            : 'waiting for funds — send USDC to walletAddress',
+        );
+        if (announce) ctx.logger.info(`llm-edgerouter: ${unavailable.split('\n')[0]}`);
+        return;
+      }
+
+      const first = signer === undefined;
+      signer = evmWallet.signer();
+      publish(
+        evmWallet.address,
+        `ready — ${formatAmount(evmWallet.network, funding.availableMinor)} deposited in the Gateway`,
+      );
+      if (first) {
+        ctx.logger.info(
+          `llm-edgerouter: funded — ${formatAmount(evmWallet.network, funding.availableMinor)} in the Gateway`,
+        );
+      }
+      clearPolling();
+    } catch (error) {
+      unavailable = `could not read the Gateway balance: ${(error as Error).message}`;
+      if (announce) ctx.logger.warn(`llm-edgerouter: ${unavailable}`);
+    }
+  };
+
   const checkEvmFunding = async (announce: boolean): Promise<void> => {
     if (!evmWallet) return;
+
+    /*
+      A Gateway network is asked a different question.
+
+      Everywhere else "can this wallet pay" means "does it hold the token". On
+      Arc it does not: payment comes from a balance deposited into the
+      GatewayWallet, so an address holding twenty USDC and nothing deposited
+      pays for nothing. Reporting the token balance there would show a funded,
+      ready wallet that refuses every call — the most confusing failure this
+      plugin could produce.
+    */
+    if (isGatewayNetwork(evmWallet.network)) {
+      await checkGatewayFunding(announce);
+      return;
+    }
+
     try {
       const funding = await evmWallet.refresh();
       if (!funding.canPay) {
@@ -1214,6 +1313,48 @@ export function apply(ctx: Context, config: Config): void {
       }
     };
 
+    /**
+     * Moves USDC from the address into the Gateway balance.
+     *
+     * Cleared before the deposit rather than after, for the same reason
+     * withdrawal is: a crash between the two leaves an unmade deposit rather
+     * than an instruction that replays on the next start. A repeated deposit is
+     * less alarming than a repeated withdrawal — it moves the user's money into
+     * their own balance — but "the plugin did that twice" is not a sentence
+     * worth having to explain either way.
+     */
+    const runDeposit = async (amount: string): Promise<void> => {
+      try {
+        await settingsCtx.settings.update(NS, { depositAmount: '' });
+
+        if (!evmWallet) throw new Error('this provider is not paying from a local EVM wallet');
+        if (!isGatewayNetwork(evmWallet.network)) {
+          throw new Error(`${evmWallet.network} does not pay through Circle Gateway`);
+        }
+        if (!/^\d+(\.\d+)?$/.test(amount) || Number(amount) <= 0) {
+          throw new Error(`"${amount}" is not an amount of USDC`);
+        }
+
+        ctx.logger.info(`llm-edgerouter: depositing ${amount} USDC into the Gateway`);
+        const deposited = await depositToGateway({
+          privateKey: evmWallet.exportPrivateKey(),
+          network: evmWallet.network,
+          amount,
+        });
+        ctx.logger.info(`llm-edgerouter: deposited — ${deposited.hash}`);
+
+        // The balance that decides "can pay" just changed, and nothing else
+        // would notice: polling stops once funded.
+        await checkGatewayFunding(false);
+      } catch (error) {
+        const message = (error as Error).message;
+        ctx.logger.warn(`llm-edgerouter: the deposit failed — ${message}`);
+        await settingsCtx.settings
+          .update(NS, { walletStatus: `deposit failed — ${message}` })
+          .catch(() => {});
+      }
+    };
+
     let withdrawing = false;
     const runWithdrawal = async (to: string): Promise<void> => {
       if (withdrawing) return;
@@ -1291,6 +1432,12 @@ export function apply(ctx: Context, config: Config): void {
         const revoke = current().delegateRevoke?.trim();
         if (revoke) {
           void runRevoke(revoke);
+          return;
+        }
+
+        const deposit = current().depositAmount?.trim();
+        if (deposit) {
+          void runDeposit(deposit);
           return;
         }
 
