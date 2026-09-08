@@ -16,6 +16,7 @@
     "live-check": "bun packages/dsh/live-check.ts",
     "arc-check": "bun packages/sdk/arc-check.ts",
     "composite-check": "bun packages/sdk/composite-check.ts",
+    "arc-pay-check": "bun packages/sdk/arc-pay-check.ts",
     "ens-check": "bun packages/ens/live-check.ts",
     "ens-guard-check": "bun packages/ens/guard-live-check.ts",
     "ens-revoke-check": "bun packages/ens/revoke-live-check.ts",

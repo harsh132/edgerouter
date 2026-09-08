@@ -44,7 +44,17 @@
     // is ~1234 tinybars. It is a fixed number rather than an oracle read, which
     // means the quote drifts as the price moves — acceptable on testnet, not on
     // mainnet.
-    "NETWORKS": "[{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.10400448\",\"feePayer\":\"0.0.7162784\",\"unitsPerUsdMinor\":\"1234\"},{\"kind\":\"evm\",\"id\":\"eip155:84532\",\"asset\":\"0x036CbD53842c5426634e7929541eC2318f3dCF7e\",\"payTo\":\"0x3f870ECEEE0EcE3a54254C1D364230ABd14aa2d3\",\"assetName\":\"USDC\",\"assetVersion\":\"2\",\"unitsPerUsdMinor\":\"1\",\"facilitatorUrl\":\"https://x402.org/facilitator\"}]",
+    //
+    // Arc is a third kind. Its USDC is also its gas token, and payment goes
+    // through Circle's Gateway rather than a direct transfer: the signature
+    // binds to the GatewayWallet rather than to the token, the buyer pays from
+    // a balance deposited there beforehand, and settlement returns a batch id
+    // rather than a transaction hash. gatewayDomain is Circle's own chain
+    // numbering — 26 for Arc — and is not the chain id.
+    //
+    // It carries its own facilitator because no general one settles a Gateway
+    // payment; without it the gate would quote terms nothing can settle.
+    "NETWORKS": "[{\"kind\":\"hedera\",\"id\":\"hedera:testnet\",\"asset\":\"0.0.0\",\"payTo\":\"0.0.10400448\",\"feePayer\":\"0.0.7162784\",\"unitsPerUsdMinor\":\"1234\"},{\"kind\":\"evm\",\"id\":\"eip155:84532\",\"asset\":\"0x036CbD53842c5426634e7929541eC2318f3dCF7e\",\"payTo\":\"0x3f870ECEEE0EcE3a54254C1D364230ABd14aa2d3\",\"assetName\":\"USDC\",\"assetVersion\":\"2\",\"unitsPerUsdMinor\":\"1\",\"facilitatorUrl\":\"https://x402.org/facilitator\"},{\"kind\":\"gateway\",\"id\":\"eip155:5042002\",\"asset\":\"0x3600000000000000000000000000000000000000\",\"payTo\":\"0x3f870ECEEE0EcE3a54254C1D364230ABd14aa2d3\",\"gatewayWallet\":\"0x0077777d7EBA4688BDeF3E311b846F25870A19B9\",\"gatewayDomain\":26,\"assetName\":\"GatewayWalletBatched\",\"assetVersion\":\"1\",\"unitsPerUsdMinor\":\"1\",\"facilitatorUrl\":\"https://gateway-api-testnet.circle.com/v1/x402\"}]",
     "DEFAULT_NETWORK": "hedera:testnet",
     // Public, so it is a var rather than a secret. Which facilitator settles
     // our payments is not a thing to hide, and hiding it would mean nobody can

@@ -50,7 +50,7 @@ export type Paid = {
   elapsedMs: number;
 };
 
-const HEADER = 'X-PAYMENT';
+const HEADER = 'PAYMENT-SIGNATURE';
 const RESPONSE_HEADER = 'PAYMENT-RESPONSE';
 
 const encode = (value: unknown): string =>
