@@ -74,15 +74,48 @@ export type WalletMaterial = {
  * ED25519 key can be a public-key alias too, but far less software will send
  * to one, which defeats the purpose.
  */
-export const generateWallet = (network = HEDERA_TESTNET): WalletMaterial => {
-  const key = PrivateKey.generateECDSA();
+export const generateWallet = (network = HEDERA_TESTNET): WalletMaterial =>
+  walletFromKey(PrivateKey.generateECDSA().toStringRaw(), network);
+
+/**
+ * Reads a stored key, in either of the two forms this project has written.
+ *
+ * Hedera's SDK serialises to DER and viem to 32 raw bytes, and both are the
+ * same secp256k1 scalar — so the form a key was saved in should not decide what
+ * it can be used for. Length is what tells them apart: a raw key is exactly 64
+ * hex characters and a DER envelope is always longer. Sniffing the `30` tag
+ * would be wrong, because a raw key can legitimately begin with those digits.
+ */
+export const readEcdsaKey = (value: string): PrivateKey => {
+  const hex = value.trim().replace(/^0x/, '');
+  return hex.length === 64 ? PrivateKey.fromStringECDSA(hex) : PrivateKey.fromStringDer(value);
+};
+
+/**
+ * Builds Hedera wallet material from one secp256k1 key.
+ *
+ * The same key is an EVM account, and this is what lets the two be one wallet:
+ * `publicKey.toEvmAddress()` and viem's `privateKeyToAccount` derive the same
+ * twenty bytes from the same scalar — checked in `wallet-check`, because it is
+ * an assumption the storage layer now rests on rather than a coincidence.
+ */
+export const walletFromKey = (
+  rawPrivateKey: string,
+  network = HEDERA_TESTNET,
+  accountId?: string,
+): WalletMaterial => {
+  const key = readEcdsaKey(rawPrivateKey);
   return {
     privateKey: key.toStringDer(),
     publicKey: key.publicKey.toStringRaw(),
     evmAddress: `0x${key.publicKey.toEvmAddress()}`,
     network,
+    ...(accountId ? { accountId } : {}),
   };
 };
+
+/** The bare 32 bytes, whatever form the material stores. Never displayed. */
+export const rawKeyOf = (privateKey: string): string => readEcdsaKey(privateKey).toStringRaw();
 
 export type Funding =
   | { funded: false; evmAddress: string; balanceMinor: 0n }
@@ -159,7 +192,7 @@ export const openWallet = (
 ): LocalWallet => {
   const doFetch = options.fetch ?? fetch;
   const network = material.network;
-  const key = PrivateKey.fromStringDer(material.privateKey);
+  const key = readEcdsaKey(material.privateKey);
   let accountId = material.accountId ?? null;
 
   const client = (): Client => {

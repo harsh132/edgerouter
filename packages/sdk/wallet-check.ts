@@ -13,13 +13,16 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { privateKeyToAccount } from 'viem/accounts';
 import {
   generateWallet,
+  rawKeyOf,
+  walletFromKey,
   openWallet,
   loadOrCreateWallet,
   loadOrCreateEvmWallet,
   walletPath,
-  evmWalletPath,
+  sharedWalletPath,
   hbarOf,
 } from './src/index';
 
@@ -120,7 +123,7 @@ const home = mkdtempSync(join(tmpdir(), 'edgerouter-wallet-'));
 try {
   const first = loadOrCreateWallet({ network: 'hedera:testnet', home, fetch: mirror('missing') });
   check(first.created, 'the first open generates a wallet');
-  check(first.path === walletPath('hedera:testnet', home), 'it lands where it says it does');
+  check(first.path === sharedWalletPath(home), 'it lands where it says it does');
   // The basename, not the whole path — on Windows the path starts `C:`.
   check(
     !first.path.split(/[\\/]/).at(-1)!.includes(':'),
@@ -134,11 +137,19 @@ try {
     'it is the same wallet, so funds sent to it are still reachable',
   );
 
+  /*
+    One key covers Hedera's networks too, so this is the same address on
+    mainnet — deliberately. What used to be checked here was the opposite, and
+    the isolation it described was real: a leaked key is now every network. The
+    trade is stated in `sharedWalletPath`, and the bound that actually holds is
+    the balance, not the file.
+  */
   const other = loadOrCreateWallet({ network: 'hedera:mainnet', home, fetch: mirror('missing') });
   check(
-    other.wallet.evmAddress !== first.wallet.evmAddress,
-    'a different network gets a different wallet, so testnet play cannot touch mainnet',
+    other.wallet.evmAddress === first.wallet.evmAddress,
+    'the same key answers on another Hedera network',
   );
+  check(other.wallet.network === 'hedera:mainnet', 'as the network it was asked for');
 
   const funded = loadOrCreateWallet({
     network: 'hedera:testnet',
@@ -146,17 +157,26 @@ try {
     fetch: mirror({ account: '0.0.5150', tinybars: 100 }),
   });
   await funded.wallet.refresh();
-  const onDisk = JSON.parse(readFileSync(funded.path, 'utf8')) as Record<string, unknown>;
-  check(onDisk.accountId === '0.0.5150', 'the resolved account id is written back');
+  const onDisk = JSON.parse(readFileSync(funded.path, 'utf8')) as {
+    address: string;
+    accounts?: Record<string, string>;
+  };
   check(
-    onDisk.evmAddress === first.wallet.evmAddress,
+    onDisk.accounts?.['hedera:testnet'] === '0.0.5150',
+    'the resolved account id is written back, under its network',
+  );
+  check(
+    onDisk.accounts?.['hedera:mainnet'] === undefined,
+    'and only under its network — the same key is a different account elsewhere',
+  );
+  check(
+    onDisk.address.toLowerCase() === first.wallet.evmAddress.toLowerCase(),
     'writing the id back did not replace the key',
   );
 
   // The failure worth being certain about: a damaged file must never be
   // silently replaced, because the key it held may still hold money.
-  const { writeFileSync } = await import('node:fs');
-  writeFileSync(walletPath('hedera:testnet', home), 'not json at all');
+  writeFileSync(sharedWalletPath(home), 'not json at all');
   await throws('move it aside', 'a damaged wallet file is refused, not overwritten', () =>
     loadOrCreateWallet({ network: 'hedera:testnet', home, fetch: mirror('missing') }),
   );
@@ -164,30 +184,46 @@ try {
   rmSync(home, { recursive: true, force: true });
 }
 
-/* ------------------------------------------------------------------ EVM keys */
+/* ------------------------------------------------------------------- one key */
 
-section('One EVM key, every EVM chain');
+section('One key, every chain');
 
 {
-  const home = mkdtempSync(join(tmpdir(), 'edgerouter-evm-'));
-  try {
-    const base = loadOrCreateEvmWallet({ network: 'eip155:84532', home });
-    check(base.created, 'the first open generates a wallet');
-    check(base.path === evmWalletPath(home), 'stored once, not once per chain');
+  /*
+    The assumption the storage layer now rests on, checked rather than trusted:
+    a Hedera ECDSA key and an EVM key are the same secp256k1 scalar, so the same
+    key yields the same twenty bytes through either derivation. If this ever
+    stopped holding, one wallet would silently become two addresses again.
+  */
+  const material = generateWallet('hedera:testnet');
+  const viaViem = privateKeyToAccount(`0x${rawKeyOf(material.privateKey)}`).address;
+  check(
+    viaViem.toLowerCase() === material.evmAddress.toLowerCase(),
+    'Hedera and viem derive the same address from one key',
+  );
 
-    /*
-      The property the whole change rests on: asking for a different chain is
-      asking the same key a different question. A second address here would mean
-      a second address to fund, which is what this replaced.
-    */
+  const round = walletFromKey(rawKeyOf(material.privateKey), 'hedera:testnet');
+  check(round.evmAddress === material.evmAddress, 'a raw key rebuilds the same wallet');
+  check(round.privateKey === material.privateKey, 'and the same DER form');
+}
+
+{
+  const home = mkdtempSync(join(tmpdir(), 'edgerouter-onekey-'));
+  try {
+    const hedera = loadOrCreateWallet({ network: 'hedera:testnet', home, fetch: mirror('missing') });
+    check(hedera.created, 'the first open generates a key');
+    check(hedera.path === sharedWalletPath(home), 'stored once, not once per chain');
+
     const sepolia = loadOrCreateEvmWallet({ network: 'eip155:11155111', home });
-    check(!sepolia.created, 'a second chain does not generate a second wallet');
+    check(!sepolia.created, 'an EVM chain reuses it rather than generating');
     check(
-      sepolia.wallet.address === base.wallet.address,
-      'the same address answers on every EVM chain',
+      sepolia.wallet.address.toLowerCase() === hedera.wallet.evmAddress.toLowerCase(),
+      'the Hedera address and the EVM address are one address',
     );
-    check(sepolia.wallet.network === 'eip155:11155111', 'and it is on the chain that was asked for');
-    check(base.wallet.network === 'eip155:84532', 'while the first handle keeps its own');
+
+    const base = loadOrCreateEvmWallet({ network: 'eip155:84532', home });
+    check(base.wallet.address === sepolia.wallet.address, 'and it is the same on every EVM chain');
+    check(base.wallet.network === 'eip155:84532', 'while the chain comes from the caller');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -195,34 +231,45 @@ section('One EVM key, every EVM chain');
 
 {
   /*
-    Adoption. An earlier version wrote a key per chain and some of those
-    addresses hold money; a fresh shared wallet beside them would leave the
-    funds somewhere the plugin no longer looks.
+    Adoption. Earlier versions wrote a key per chain and some of those addresses
+    hold money; a fresh key beside them would leave the funds where this code no
+    longer looks. Hedera is preferred because its account id is the one thing
+    here that cannot be re-derived from the key.
   */
   const home = mkdtempSync(join(tmpdir(), 'edgerouter-legacy-'));
   try {
-    const legacy = {
-      privateKey: `0x${'11'.repeat(32)}`,
-      address: '0x9a2E12340000000000000000000000000000BEEF',
-      network: 'eip155:84532',
-    };
     mkdirSync(home, { recursive: true });
-    writeFileSync(walletPath('eip155:84532', home), JSON.stringify(legacy));
-
-    const adopted = loadOrCreateEvmWallet({ network: 'eip155:11155111', home });
-    check(!adopted.created, 'an existing per-chain key is adopted, not replaced');
-    check(
-      adopted.wallet.exportPrivateKey().toLowerCase() === legacy.privateKey,
-      'and it is the same key, so the money is still reachable',
+    const legacy = generateWallet('hedera:testnet');
+    writeFileSync(
+      walletPath('hedera:testnet', home),
+      JSON.stringify({ ...legacy, accountId: '0.0.4242' }),
     );
-    check(existsSync(evmWalletPath(home)), 'copied to the shared path');
+    writeFileSync(
+      walletPath('eip155:84532', home),
+      JSON.stringify({
+        privateKey: `0x${'11'.repeat(32)}`,
+        address: '0x9a2E12340000000000000000000000000000BEEF',
+        network: 'eip155:84532',
+      }),
+    );
+
+    const adopted = loadOrCreateWallet({ network: 'hedera:testnet', home, fetch: mirror('missing') });
+    check(!adopted.created, 'an existing key is adopted, not replaced');
     check(
-      existsSync(walletPath('eip155:84532', home)),
+      adopted.wallet.evmAddress === legacy.evmAddress,
+      'the Hedera key wins over the EVM one, because it may carry an account id',
+    );
+    check(adopted.wallet.accountId() === '0.0.4242', 'and that account id survives');
+    check(existsSync(sharedWalletPath(home)), 'copied to the shared path');
+    check(
+      existsSync(walletPath('hedera:testnet', home)),
       'and the original is left where it was, not moved out from under a backup',
     );
+
+    const evm = loadOrCreateEvmWallet({ network: 'eip155:84532', home });
     check(
-      adopted.wallet.network === 'eip155:11155111',
-      'the chain comes from the caller, never from the adopted file',
+      evm.wallet.address.toLowerCase() === legacy.evmAddress.toLowerCase(),
+      'the adopted key answers on EVM chains too',
     );
   } finally {
     rmSync(home, { recursive: true, force: true });

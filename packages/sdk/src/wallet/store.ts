@@ -31,7 +31,14 @@ import {
 } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
-import { generateWallet, openWallet, type LocalWallet, type WalletMaterial } from './local';
+import {
+  generateWallet,
+  openWallet,
+  rawKeyOf,
+  walletFromKey,
+  type LocalWallet,
+  type WalletMaterial,
+} from './local';
 import {
   generateEvmWallet,
   openEvmWallet,
@@ -50,31 +57,100 @@ export const defaultHome = (): string =>
  * testnet wallet and a mainnet one genuinely are different wallets. On EVM they
  * are not: one secp256k1 key is the same address on every chain, which is a
  * property this codebase already relies on — the same signer pays on Base
- * Sepolia and on Base without a line changing. See `evmWalletPath`.
+ * Sepolia and on Base without a line changing.
+ *
+ * Kept only to find keys written in that older layout — see `adoptLegacy`.
+ * Nothing writes this path any more; `sharedWalletPath` is where a wallet goes.
  */
 export const walletPath = (network: string, home = defaultHome()): string =>
   join(home, `${network.replace(/[^\w.-]/g, '-')}.wallet.json`);
 
 /**
- * The one EVM wallet, shared by every chain.
+ * The one wallet. One key, every chain, Hedera included.
  *
- * A key per chain would mean funding a separate address for Base Sepolia,
- * Sepolia, and anywhere else this ever pays or registers a name — three
- * addresses that are all "your wallet" and none of which is. The chain is a
- * property of the *request*, not of the key.
+ * Hedera ECDSA keys are secp256k1, the same curve EVM uses — which is not a
+ * coincidence this file exploits but the mechanism the whole design already
+ * rested on: auto account creation works by deriving an EVM address from the
+ * public key, so a Hedera wallet has always *had* an EVM address. Storing two
+ * keys meant two addresses to fund, two faucet visits, and two things to back
+ * up, for one agent.
  *
- * What that gives up is balance isolation: one leaked key is every EVM chain,
- * mainnet included. That is a real trade and it is the same one already made by
- * storing the key unencrypted — this is a hot wallet holding what you chose to
- * put in it, so the protection is the balance, not the filesystem. A mainnet
- * deployment wanting isolation should set `EDGEROUTER_HOME` per profile rather
- * than have this file quietly hand out different keys.
+ * So there is one key, stored raw, and each chain is a way of asking it a
+ * question. The user funds one address; it is their Hedera account and their
+ * address on Sepolia and on Base.
+ *
+ * What this gives up is balance isolation between chains — one leaked key is
+ * all of them. That is the same trade already made by storing the key
+ * unencrypted: this is a hot wallet holding what you chose to put in it, so the
+ * bound is the balance, not the filesystem. A deployment wanting separation
+ * should use `EDGEROUTER_HOME` per profile rather than have this file quietly
+ * hand out keys that differ by chain.
  */
-export const evmWalletPath = (home = defaultHome()): string => join(home, 'evm.wallet.json');
+export const sharedWalletPath = (home = defaultHome()): string => join(home, 'wallet.json');
+
+/**
+ * What is on disk.
+ *
+ * The key is stored raw — 32 bytes of hex — rather than in either SDK's
+ * serialisation, because both can read it and neither owns it. `address` is
+ * derived and stored only so the file is legible; nothing trusts it.
+ */
+export type StoredWallet = {
+  privateKey: string;
+  address: string;
+  /**
+   * Hedera account ids, keyed by network.
+   *
+   * A map rather than a field because the id is issued per network: the same
+   * key is a different `0.0.x` on testnet and mainnet, and one field would
+   * quietly report the wrong one. EVM chains need no entry at all — the address
+   * is the account.
+   */
+  accounts?: Record<string, string>;
+};
+
+const readStored = (path: string): StoredWallet | null => {
+  if (!existsSync(path)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    throw new Error(`${path} exists but is not readable JSON; move it aside rather than losing it`);
+  }
+  const m = parsed as Record<string, unknown>;
+  if (typeof m.privateKey !== 'string' || typeof m.address !== 'string') {
+    throw new Error(`${path} is not an edgerouter wallet; move it aside rather than losing it`);
+  }
+  return {
+    privateKey: m.privateKey,
+    address: m.address,
+    ...(m.accounts && typeof m.accounts === 'object'
+      ? { accounts: m.accounts as Record<string, string> }
+      : {}),
+  };
+};
+
+const writeStored = (path: string, wallet: StoredWallet): void => {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, `${JSON.stringify(wallet, null, 2)}
+`, { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Windows. `describe()` is what tells the truth about this.
+  }
+};
+
+/* ------------------------------------------------------------------ legacy */
+
+/*
+  The two shapes written before there was one wallet. Read-only, and used for
+  exactly one purpose: finding a key that already holds money. Nothing writes
+  these formats any more.
+*/
 
 const readMaterial = (path: string): WalletMaterial | null => {
   if (!existsSync(path)) return null;
-
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'));
@@ -89,63 +165,132 @@ const readMaterial = (path: string): WalletMaterial | null => {
   const m = parsed as Record<string, unknown>;
   if (
     typeof m.privateKey !== 'string' ||
-    typeof m.publicKey !== 'string' ||
     typeof m.evmAddress !== 'string' ||
     typeof m.network !== 'string'
   ) {
-    throw new Error(`${path} is not an edgerouter wallet; move it aside rather than losing it`);
+    return null;
   }
   return {
     privateKey: m.privateKey,
-    publicKey: m.publicKey,
+    publicKey: typeof m.publicKey === 'string' ? m.publicKey : '',
     evmAddress: m.evmAddress,
     network: m.network,
     ...(typeof m.accountId === 'string' ? { accountId: m.accountId } : {}),
   };
 };
 
-const write = (path: string, material: WalletMaterial): void => {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, `${JSON.stringify(material, null, 2)}\n`, { mode: 0o600 });
+const readEvmMaterial = (path: string): EvmWalletMaterial | null => {
+  if (!existsSync(path)) return null;
+  let parsed: unknown;
   try {
-    chmodSync(path, 0o600);
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
-    // Windows, or an exotic filesystem. `describe()` is what tells the truth
-    // about this; failing the write over it would help nobody.
+    throw new Error(`${path} exists but is not readable JSON; move it aside rather than losing it`);
   }
+  const m = parsed as Record<string, unknown>;
+  if (typeof m.privateKey !== 'string' || typeof m.address !== 'string') return null;
+  return {
+    privateKey: m.privateKey,
+    address: m.address,
+    network: typeof m.network === 'string' ? m.network : 'eip155:84532',
+  };
+};
+
+/**
+ * Finds a key written before there was one wallet.
+ *
+ * Earlier versions wrote `hedera-testnet.wallet.json` and `eip155-*.wallet.json`
+ * and some of those addresses hold money. A fresh key beside them would not
+ * destroy anything — the files remain — but it would put the funds somewhere
+ * this code no longer looks, which is near enough to losing them.
+ *
+ * Hedera first, and deliberately: a Hedera key may already have an account id
+ * bound to it by a transfer, and an account id is the one thing here that
+ * cannot be re-derived from the key.
+ */
+const adoptLegacy = (home: string): StoredWallet | null => {
+  if (!existsSync(home)) return null;
+  const entries = readdirSync(home);
+
+  const hedera = entries.filter((e) => /^hedera-\w+\.wallet\.json$/.test(e)).sort();
+  for (const entry of hedera) {
+    const material = readMaterial(join(home, entry));
+    if (!material) continue;
+    const network = material.network;
+    return {
+      privateKey: rawKeyOf(material.privateKey),
+      address: material.evmAddress,
+      ...(material.accountId ? { accounts: { [network]: material.accountId } } : {}),
+    };
+  }
+
+  const evm = ['evm.wallet.json', ...entries.filter((e) => /^eip155-\d+\.wallet\.json$/.test(e))];
+  for (const entry of evm) {
+    const material = readEvmMaterial(join(home, entry));
+    if (material) {
+      return { privateKey: rawKeyOf(material.privateKey), address: material.address };
+    }
+  }
+  return null;
+};
+
+/** Opens the one wallet, generating a key the first time. */
+const openStored = (home: string): { stored: StoredWallet; created: boolean } => {
+  const path = sharedWalletPath(home);
+  const existing = readStored(path);
+  if (existing) return { stored: existing, created: false };
+
+  const adopted = adoptLegacy(home);
+  if (adopted) {
+    writeStored(path, adopted);
+    return { stored: adopted, created: false };
+  }
+
+  const fresh = generateWallet();
+  const stored: StoredWallet = {
+    privateKey: rawKeyOf(fresh.privateKey),
+    address: fresh.evmAddress,
+  };
+  writeStored(path, stored);
+  return { stored, created: true };
 };
 
 export type WalletHandle = {
   wallet: LocalWallet;
   /** Where it is stored, so a UI can say so and a user can back it up. */
   path: string;
-  /** True when this call generated it. Worth telling the user once. */
+  /** True when this call generated the key. Worth telling the user once. */
   created: boolean;
 };
 
 /**
- * Opens the wallet for a network, creating one the first time.
+ * Opens the wallet as a Hedera account on one network.
  *
  * The resolved account id is written back as soon as the mirror node reports
  * it, so the id survives a restart and the plugin does not have to re-derive
- * "am I funded" from the network on every launch.
+ * "am I funded" on every launch. It is stored per network, because the same key
+ * is a different `0.0.x` on testnet and on mainnet.
  */
 export const loadOrCreateWallet = (
   options: { network?: string; home?: string; fetch?: typeof fetch } = {},
 ): WalletHandle => {
   const network = options.network ?? HEDERA_TESTNET;
-  const path = walletPath(network, options.home ?? defaultHome());
+  const home = options.home ?? defaultHome();
+  const path = sharedWalletPath(home);
+  const { stored, created } = openStored(home);
 
-  const existing = readMaterial(path);
-  const material = existing ?? generateWallet(network);
-  if (!existing) write(path, material);
+  const material = walletFromKey(stored.privateKey, network, stored.accounts?.[network]);
 
   const wallet = openWallet(material, {
     ...(options.fetch ? { fetch: options.fetch } : {}),
-    onResolved: (accountId) => write(path, { ...material, accountId }),
+    onResolved: (accountId) =>
+      writeStored(path, {
+        ...stored,
+        accounts: { ...(stored.accounts ?? {}), [network]: accountId },
+      }),
   });
 
-  return { wallet, path, created: existing === null };
+  return { wallet, path, created };
 };
 
 /** What protection the stored key actually has here. Not a reassuring guess. */
@@ -154,28 +299,6 @@ export const describe = (path: string): string =>
     ? `${path} (readable by your Windows user account; not encrypted)`
     : `${path} (mode 0600, your user only; not encrypted)`;
 
-/* --------------------------------------------------------------------- EVM */
-
-const readEvmMaterial = (path: string): EvmWalletMaterial | null => {
-  if (!existsSync(path)) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    throw new Error(`${path} exists but is not readable JSON; move it aside rather than losing it`);
-  }
-  const m = parsed as Record<string, unknown>;
-  if (
-    typeof m.privateKey !== 'string' ||
-    typeof m.address !== 'string' ||
-    typeof m.network !== 'string'
-  ) {
-    throw new Error(`${path} is not an edgerouter EVM wallet; move it aside rather than losing it`);
-  }
-  return { privateKey: m.privateKey, address: m.address, network: m.network };
-};
-
 export type EvmWalletHandle = {
   wallet: EvmWallet;
   path: string;
@@ -183,73 +306,25 @@ export type EvmWalletHandle = {
 };
 
 /**
- * Finds a key written before this file kept one wallet per key rather than per
- * chain.
+ * Opens the wallet as an EVM account on one chain.
  *
- * Earlier versions stored `eip155-84532.wallet.json` and friends, and some of
- * those addresses hold money. Generating a fresh shared wallet beside them
- * would not lose the funds — the old file is still there — but it would put
- * them somewhere the plugin no longer looks, which is close enough to losing
- * them to be worth this function.
- *
- * The chain being opened wins, and otherwise the lowest chain id, so the answer
- * does not depend on directory ordering.
- */
-const adoptLegacyEvmMaterial = (home: string, network: string): EvmWalletMaterial | null => {
-  const preferred = readEvmMaterial(walletPath(network, home));
-  if (preferred) return preferred;
-
-  if (!existsSync(home)) return null;
-  const legacy = readdirSync(home)
-    .filter((entry) => /^eip155-\d+\.wallet\.json$/.test(entry))
-    .sort((a, b) => Number(/\d+/.exec(a)![0]) - Number(/\d+/.exec(b)![0]));
-
-  for (const entry of legacy) {
-    const material = readEvmMaterial(join(home, entry));
-    if (material) return material;
-  }
-  return null;
-};
-
-/**
- * Opens the EVM wallet, creating one the first time.
- *
- * One key for every EVM chain: the network is applied to the wallet that is
- * returned, never stored as a property of the key. So the same address pays on
- * Base Sepolia and registers a name on Sepolia, and funding it once is enough.
- *
- * No account id is written back, because an EVM address is the account — the
- * file never changes after it is written, which is one fewer moment at which a
- * key file can be corrupted.
+ * The chain comes from the caller and is never read back out of the file: the
+ * key does not belong to a chain, and treating a stored network as authoritative
+ * is how a payment ends up signed for the wrong one.
  */
 export const loadOrCreateEvmWallet = (
   options: { network: string; home?: string; rpcUrl?: string },
 ): EvmWalletHandle => {
   const home = options.home ?? defaultHome();
-  const path = evmWalletPath(home);
-
-  const shared = readEvmMaterial(path);
-  const adopted = shared ?? adoptLegacyEvmMaterial(home, options.network);
-  const material = adopted ?? generateEvmWallet(options.network);
-  /*
-    Written whenever it was not already at the shared path — so adopting an old
-    per-chain key copies it here rather than moving it. The original stays put:
-    the point is that the plugin can find the money, not that the previous file
-    stops existing.
-  */
-  if (!shared) write(path, material as unknown as WalletMaterial);
-
-  /*
-    The chain comes from the caller, not from the file. A key adopted from
-    `eip155-84532.wallet.json` says "Base Sepolia" inside it, and using that
-    would silently pay on the wrong chain.
-  */
-  const onNetwork = { ...material, network: options.network };
+  const { stored, created } = openStored(home);
 
   return {
-    wallet: openEvmWallet(onNetwork, options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
-    path,
-    created: adopted === null,
+    wallet: openEvmWallet(
+      { privateKey: `0x${stored.privateKey}`, address: stored.address, network: options.network },
+      options.rpcUrl ? { rpcUrl: options.rpcUrl } : {},
+    ),
+    path: sharedWalletPath(home),
+    created,
   };
 };
 
