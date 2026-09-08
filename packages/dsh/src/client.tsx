@@ -549,6 +549,7 @@ const Delegation = ({
   status,
   tree,
   capability,
+  network,
 }: {
   scope: { set(field: string, value: unknown): Promise<void> };
   enabled: boolean;
@@ -556,6 +557,7 @@ const Delegation = ({
   status: string;
   tree: string;
   capability: string;
+  network: string;
 }): ReactNode => {
   const [label, setLabel] = useState('');
   const [amount, setAmount] = useState('');
@@ -718,7 +720,15 @@ const Delegation = ({
     h(
       'p',
       { key: 'off', style: style.note },
-      'Amounts are in the smallest unit — 100000000 is one hbar.',
+      /*
+        The smallest unit is not one unit, and it differs by an order of
+        magnitude between these chains — the same figure is one hbar on Hedera
+        and a hundred USDC on the others. A fixed example is wrong on two of the
+        three networks a user can now pick.
+      */
+      network.startsWith('hedera:')
+        ? 'Amounts are in the smallest unit — 100000000 is one hbar.'
+        : 'Amounts are in the smallest unit — 1000000 is one USDC.',
     ),
     h(
       'div',
@@ -831,6 +841,7 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
       status: section.delegationStatus ?? '',
       tree: section.delegationTree ?? '',
       capability: section.delegateCapability ?? '',
+      network: section.network ?? 'hedera:testnet',
     }),
 
     h(Naming, {

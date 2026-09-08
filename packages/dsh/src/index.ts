@@ -777,6 +777,14 @@ export function apply(ctx: Context, config: Config): void {
 
       const first = signer === undefined;
       signer = evmWallet.signer();
+      /*
+        The same retry the other two funding paths do, and it was missing here:
+        delegation needs a signer, at boot there is not one, and this is the
+        moment that changes. Without it the settings page shows a ready wallet
+        above a delegation card still saying the payment source has not
+        started — which is what it did.
+      */
+      if (first) void syncDelegation();
       publish(
         evmWallet.address,
         `ready — ${formatAmount(evmWallet.network, funding.availableMinor)} deposited in the Gateway`,
