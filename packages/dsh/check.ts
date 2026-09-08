@@ -12,7 +12,7 @@ import { LlmError } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm';
 import { base64, type PaymentRequirements, type PaymentSigner } from '../sdk/src/index';
 import { EdgerouterAdapter } from './src/adapter';
-import { resolveMaxAmount, createReporter } from './src/index';
+import { resolveMaxAmount, createReporter, isWithdrawDestination } from './src/index';
 
 const HEDERA = 'hedera:testnet';
 const BASE = 'eip155:84532';
@@ -611,6 +611,32 @@ section('Reporting the wallet address');
     later.length === 1 && later[0] === '0x2',
     'only the latest state is replayed, not the whole history',
   );
+}
+
+{
+  /*
+    A withdrawal destination is checked before anything is signed, and the two
+    networks do not take the same-looking address. The case that matters is the
+    cross-network one: an EVM address is what a user has in their clipboard on
+    either chain, and on Hedera it is not a destination.
+  */
+  check(isWithdrawDestination('0.0.1234', HEDERA), 'a Hedera account id is a Hedera destination');
+  check(
+    !isWithdrawDestination('0xabc9a1d0373f4e0bd477f4950fe3b43ec28cf1f6', HEDERA),
+    'an EVM address is not a Hedera destination',
+  );
+  check(
+    isWithdrawDestination('0xabc9a1d0373f4e0bd477f4950fe3b43ec28cf1f6', BASE),
+    'an EVM address is an EVM destination',
+  );
+  check(!isWithdrawDestination('0.0.1234', BASE), 'a Hedera account id is not an EVM destination');
+  check(!isWithdrawDestination('', HEDERA), 'an empty destination is refused');
+  check(!isWithdrawDestination('0xabc', BASE), 'a truncated EVM address is refused');
+  check(
+    !isWithdrawDestination('0xabc9a1d0373f4e0bd477f4950fe3b43ec28cf1f6ff', BASE),
+    'an over-long EVM address is refused',
+  );
+  check(!isWithdrawDestination('0.0', HEDERA), 'a malformed account id is refused');
 }
 
 console.log(failures === 0 ? '\nAll checks pass.' : `\n${failures} FAILED.`);

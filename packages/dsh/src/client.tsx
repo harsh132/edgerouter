@@ -42,7 +42,36 @@ type Section = {
   walletStatus?: string;
   network?: string;
   wallet?: string;
+  /**
+   * A command, not a setting: the address the Node half should send everything
+   * to. Set by the button below, cleared by the Node half once it has taken the
+   * instruction. Non-empty therefore means "a withdrawal is in flight", which
+   * is what disables the button.
+   */
+  withdrawTo?: string;
+  /** Reported by the Node half: how the last withdrawal went. */
+  withdrawStatus?: string;
 };
+
+/**
+ * What a withdrawal destination looks like on this network.
+ *
+ * Checked here so a typo is caught before it becomes a transfer, and checked
+ * again in the Node half because this half is a convenience and the other one
+ * holds the key.
+ */
+const destination = (network: string | undefined) =>
+  (network ?? 'hedera:testnet').startsWith('eip155')
+    ? {
+        placeholder: '0x…',
+        hint: 'A wallet address on this chain.',
+        valid: (value: string) => /^0x[0-9a-fA-F]{40}$/.test(value),
+      }
+    : {
+        placeholder: '0.0.1234',
+        hint: 'A Hedera account id — not an EVM address.',
+        valid: (value: string) => /^\d+\.\d+\.\d+$/.test(value),
+      };
 
 const FAUCETS: Record<string, { label: string; url: string; asset: string }> = {
   hedera: { label: 'Hedera portal faucet', url: 'https://portal.hedera.com/faucet', asset: 'testnet HBAR' },
@@ -81,6 +110,31 @@ const style = {
     font: 'inherit',
   },
   note: { margin: 0, fontSize: '13px', opacity: 0.65, lineHeight: 1.5 },
+  input: {
+    flex: '1 1 260px',
+    minWidth: 0,
+    padding: '6px 10px',
+    borderRadius: '6px',
+    border: '1px solid rgba(128,128,128,0.35)',
+    background: 'transparent',
+    color: 'inherit',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: '13px',
+  },
+  /*
+    The confirm button is the one control here that moves money, so it is the
+    one control here that does not look like the others.
+  */
+  danger: {
+    padding: '6px 12px',
+    borderRadius: '6px',
+    border: '1px solid #d2493a',
+    background: 'transparent',
+    color: '#e5534b',
+    cursor: 'pointer',
+    font: 'inherit',
+  },
+  disabled: { opacity: 0.45, cursor: 'default' },
   dot: (ok: boolean) => ({
     width: '8px',
     height: '8px',
@@ -112,6 +166,110 @@ const CopyButton = ({ value }: { value: string }): ReactNode => {
   );
 };
 
+/**
+ * Sends everything in the wallet somewhere else.
+ *
+ * Two deliberate frictions, because this is the only irreversible thing on the
+ * page. It is closed until asked for, so it cannot be hit while aiming at
+ * "Copy address"; and the confirm stays disabled until the destination parses
+ * for this network, so the common way to lose testnet funds — an EVM address
+ * pasted into a Hedera transfer — is refused before it is signed.
+ *
+ * The button does not perform the withdrawal. It writes the destination into
+ * settings and the Node half, which is the only half holding a key, does the
+ * rest and reports back through `withdrawStatus`.
+ */
+const Withdraw = ({
+  scope,
+  network,
+  pending,
+  result,
+}: {
+  scope: { set(field: string, value: unknown): Promise<void> };
+  network: string | undefined;
+  pending: boolean;
+  result: string;
+}): ReactNode => {
+  const [open, setOpen] = useState(false);
+  const [to, setTo] = useState('');
+  const spec = destination(network);
+  const ready = spec.valid(to.trim()) && !pending;
+
+  if (!open) {
+    return h('div', { style: { ...style.card, gap: '8px' } }, [
+      h('div', { key: 'l', style: style.label }, 'Withdraw'),
+      h(
+        'p',
+        { key: 'n', style: style.note },
+        'Moves the whole balance out of this wallet. Nothing is kept back except, ' +
+          'on Hedera, a small reserve for the transfer’s own fee.',
+      ),
+      h(
+        'div',
+        { key: 'r', style: style.row },
+        [
+          h(
+            'button',
+            { key: 'b', type: 'button', style: style.button, onClick: () => setOpen(true) },
+            'Withdraw…',
+          ),
+          ...(result ? [h('span', { key: 's', style: style.note }, result)] : []),
+        ],
+      ),
+    ]);
+  }
+
+  return h('div', { style: { ...style.card, gap: '10px' } }, [
+    h('div', { key: 'l', style: style.label }, 'Withdraw everything'),
+    h('p', { key: 'h', style: style.note }, spec.hint),
+    h('div', { key: 'r', style: style.row }, [
+      h('input', {
+        key: 'i',
+        style: style.input,
+        value: to,
+        placeholder: spec.placeholder,
+        spellCheck: false,
+        autoComplete: 'off',
+        disabled: pending,
+        onChange: (event: { target: { value: string } }) => setTo(event.target.value),
+      }),
+      h(
+        'button',
+        {
+          key: 'go',
+          type: 'button',
+          disabled: !ready,
+          style: ready ? style.danger : { ...style.danger, ...style.disabled },
+          onClick: () => {
+            /*
+              Fire and forget. A rejected write leaves the field unset, so the
+              withdrawal simply does not happen — there is no half-done state to
+              unwind, and the Node half never saw an instruction.
+            */
+            void scope.set('withdrawTo', to.trim());
+            setTo('');
+          },
+        },
+        pending ? 'Sending…' : 'Send everything',
+      ),
+      h(
+        'button',
+        {
+          key: 'x',
+          type: 'button',
+          style: style.button,
+          onClick: () => {
+            setOpen(false);
+            setTo('');
+          },
+        },
+        'Cancel',
+      ),
+    ]),
+    ...(result ? [h('p', { key: 's', style: style.note }, result)] : []),
+  ]);
+};
+
 const Page = ({ ctx }: { ctx: Context }): ReactNode => {
   const scope = ctx.settingsScope.bind<Section>({ namespace: NS });
   const snapshot = useSyncExternalStore(
@@ -126,7 +284,7 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
   const faucet = faucetFor(section.network);
 
   const heading = h('div', { key: 'h' }, [
-    h('h3', { key: 't', style: { margin: '0 0 6px' } }, 'edgerouter'),
+    h('h3', { key: 't', style: { margin: '0 0 6px' } }, 'Edge Router'),
     h(
       'p',
       { key: 'p', style: style.lead },
@@ -167,7 +325,13 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
         h('span', { key: 'd', style: style.dot(funded) }),
         h('span', { key: 's' }, funded ? 'Ready' : 'Waiting for funds'),
       ]),
-      h('div', { key: 'lbl', style: style.label }, `Send ${faucet.asset} to`),
+      /*
+        The same address, described by what the reader still has to do with it.
+        Before funding it is an instruction; after funding it is just the
+        wallet's name, and leaving the instruction up reads as though the setup
+        never took.
+      */
+      h('div', { key: 'lbl', style: style.label }, funded ? 'Wallet address' : `Send ${faucet.asset} to`),
       h('div', { key: 'addr', style: style.address }, address),
       h('div', { key: 'row', style: style.row }, [
         h(CopyButton, { key: 'copy', value: address }),
@@ -179,6 +343,23 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
       ]),
       h('p', { key: 'status', style: style.note }, status),
     ]),
+
+    /*
+      Only once there is something to withdraw. An unfunded wallet has a balance
+      of zero and the offer would be noise on the one screen where the reader is
+      trying to do the opposite.
+    */
+    ...(funded
+      ? [
+          h(Withdraw, {
+            key: 'withdraw',
+            scope,
+            network: section.network,
+            pending: Boolean(section.withdrawTo),
+            result: section.withdrawStatus ?? '',
+          }),
+        ]
+      : []),
 
     h('div', { key: 'notes', style: style.card }, [
       h('div', { key: 'l', style: style.label }, 'Worth knowing'),
@@ -195,8 +376,8 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
         'p',
         { key: 'b', style: style.note },
         'The key lives in ~/.edgerouter and is not encrypted. Treat this as a hot ' +
-          'wallet holding what you chose to put in it — run ' +
-          '`npx dsh-plugin-edgerouter sweep <address>` to take it all back out.',
+          'wallet holding what you chose to put in it — Withdraw above takes it all ' +
+          'back out, as does `npx dsh-plugin-edgerouter sweep <address>`.',
       ),
       h(
         'p',
@@ -222,7 +403,7 @@ export function apply(ctx: Context): void {
         // After the shipped sections, before nothing in particular. A plugin
         // claiming a low number is claiming to matter more than the shell.
         order: 60,
-        label: () => 'edgerouter',
+        label: () => 'Edge Router',
       },
       () => h(Page, { ctx }),
     ),

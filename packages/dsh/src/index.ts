@@ -125,6 +125,19 @@ export interface Config {
   walletAddress?: string;
   /** Reported, not configured: whether the wallet can pay yet, and what holds. */
   walletStatus?: string;
+
+  /**
+   * A command, not a setting: where to send the whole balance.
+   *
+   * The settings page writes an address here and this plugin acts on it, then
+   * clears it — so a non-empty value means a withdrawal is in flight, and an
+   * empty one means nothing is pending. It is deliberately not a stored
+   * preference: a destination that survived a restart would be a wallet that
+   * empties itself every time the harness boots.
+   */
+  withdrawTo?: string;
+  /** Reported, not configured: how the last withdrawal went. */
+  withdrawStatus?: string;
 }
 
 export const Config: z<Config> = z.object({
@@ -142,7 +155,24 @@ export const Config: z<Config> = z.object({
 
   walletAddress: z.string().description('Send funds here. Reported by the plugin; editing does nothing.'),
   walletStatus: z.string().description('Reported by the plugin.'),
+
+  withdrawTo: z
+    .string()
+    .description('Setting this sends the whole balance there, once. Cleared by the plugin.'),
+  withdrawStatus: z.string().description('Reported by the plugin.'),
 });
+
+/**
+ * Whether an address is a plausible destination on this network.
+ *
+ * Checked before signing rather than left to the chain, because the two
+ * networks take different-looking addresses and the failure mode of getting it
+ * wrong is not symmetrical: an EVM address handed to Hedera's `AccountId`
+ * parser throws, but a Hedera account id is a shape a careless parser could
+ * accept, and there is no undoing a transfer that went somewhere real.
+ */
+export const isWithdrawDestination = (to: string, network: string): boolean =>
+  isEvmNetwork(network) ? /^0x[0-9a-fA-F]{40}$/.test(to) : /^\d+\.\d+\.\d+$/.test(to);
 
 /**
  * Reads and validates the per-call ceiling for one network.
@@ -271,6 +301,42 @@ export function apply(ctx: Context, config: Config): void {
   let evmWallet: EvmWallet | undefined;
   let source: WalletSource | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
+  /**
+   * The balance as last read, so a later read can be told apart from the same
+   * read repeated. Only a withdrawal needs this: it is the one moment the
+   * balance changes because of something happening here, and the one moment
+   * "the number has not moved yet" and "the number is correct" look identical.
+   */
+  let lastBalanceMinor: bigint | undefined;
+
+  /**
+   * Re-reads the balance until it reflects a transfer that already happened.
+   *
+   * A receipt says the transfer succeeded on consensus; it does not say the
+   * mirror node has caught up, and the mirror node is what the balance is read
+   * from. Reading once immediately after a sweep therefore reports the old
+   * number — and reports it as settled, because it looks exactly like a correct
+   * read. The poll that would have corrected it has already stopped, since a
+   * funded wallet has nothing left to wait for.
+   *
+   * So the change is waited for rather than assumed, and the wait is bounded:
+   * if the mirror node is far enough behind that thirty seconds does not cover
+   * it, the next read of any kind will pick it up, and a number that is briefly
+   * stale is better than a plugin that hangs on one.
+   */
+  const settleBalance = async (): Promise<void> => {
+    const before = lastBalanceMinor;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      if (wallet) await checkFunding(false);
+      else if (evmWallet) await checkEvmFunding(false);
+      else return;
+      if (lastBalanceMinor !== before) return;
+    }
+    ctx.logger.warn(
+      'llm-edgerouter: the withdrawal is done, but the balance shown has not caught up yet',
+    );
+  };
 
   const clearPolling = () => {
     if (timer) {
@@ -291,6 +357,9 @@ export function apply(ctx: Context, config: Config): void {
       const funding = await wallet.refresh();
       if (!funding.funded) {
         signer = undefined;
+        // Recorded on this branch too, so a sweep that empties the account is a
+        // balance that *changed* rather than one that was never read.
+        lastBalanceMinor = 0n;
         unavailable = [
           'this wallet has no funds yet.',
           ``,
@@ -312,6 +381,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       const first = signer === undefined;
       signer = wallet.signer();
+      lastBalanceMinor = funding.balanceMinor;
       publish(
         wallet.evmAddress,
         `ready — ${funding.accountId} holds ${formatAmount(wallet.network, funding.balanceMinor)}`,
@@ -366,6 +436,7 @@ export function apply(ctx: Context, config: Config): void {
       const funding = await evmWallet.refresh();
       if (!funding.canPay) {
         signer = undefined;
+        lastBalanceMinor = funding.tokenMinor;
         unavailable = [
           'this wallet holds no USDC yet.',
           ``,
@@ -386,6 +457,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       const first = signer === undefined;
       signer = evmWallet.signer();
+      lastBalanceMinor = funding.tokenMinor;
       publish(
         evmWallet.address,
         `ready — holds ${formatAmount(evmWallet.network, funding.tokenMinor)}`,
@@ -544,6 +616,50 @@ export function apply(ctx: Context, config: Config): void {
    */
   const publish = (address: string, status: string) => reporter.publish(address, status);
 
+  /**
+   * Writes the report into settings, retrying a lock, and naming it when it
+   * persists.
+   *
+   * The settings file is written atomically — a temporary file, then a rename
+   * over the real one — and on Windows that rename fails outright while any
+   * other process holds the destination open. An editor with the file open is
+   * enough. The failure surfaces nowhere useful: the write is a convenience, so
+   * it is caught, and the settings page then reports "no wallet yet" about a
+   * wallet that exists and is being logged about two lines up.
+   *
+   * A lock held by a save is momentary, so it is retried. A lock held by an
+   * open editor is not, so after the retries the log says what is actually
+   * wrong instead of repeating an errno at somebody.
+   */
+  const reportIntoSettings = async (
+    settingsCtx: { settings: { update(ns: string, patch: object): Promise<unknown> } },
+    address: string,
+    status: string,
+  ): Promise<void> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await settingsCtx.settings.update(NS, { walletAddress: address, walletStatus: status });
+        return;
+      } catch (error) {
+        const message = (error as Error).message;
+        const locked = /EPERM|EBUSY|EACCES/.test(message);
+        if (locked && attempt < 4) {
+          await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+          continue;
+        }
+        ctx.logger.warn(
+          locked
+            ? `llm-edgerouter: the settings file is held open by another program, so the wallet` +
+                ` address could not be written into it. Close it in whatever has it open` +
+                ` (an editor started from "Open configuration file" will do this) and restart.` +
+                ` The address is ${address} — ${message}`
+            : `llm-edgerouter: could not report the wallet address into settings: ${message}`,
+        );
+        return;
+      }
+    }
+  };
+
   /*
     Started last, after everything it publishes into exists.
 
@@ -569,20 +685,79 @@ export function apply(ctx: Context, config: Config): void {
         would get — so a settings service that refuses a write must not take the
         provider down with it.
       */
-      void settingsCtx.settings
-        .update(NS, { walletAddress: address, walletStatus: status })
-        .catch((error: unknown) => {
-          ctx.logger.warn(
-            `llm-edgerouter: could not report the wallet address into settings: ${(error as Error).message}`,
-          );
-        });
+      void reportIntoSettings(settingsCtx, address, status);
     });
+
+    /**
+     * Acts on a `withdrawTo` written by the settings page, exactly once.
+     *
+     * Read as a command and cleared *before* the transfer, not after. That
+     * ordering is the whole safety argument: a crash between the two leaves an
+     * empty field and an unmade transfer, whereas clearing afterwards leaves a
+     * standing instruction that would be replayed on the next start — and a
+     * wallet that empties itself on boot is a worse bug than a withdrawal that
+     * has to be asked for twice.
+     *
+     * For the same reason it only ever runs from a change, never from startup:
+     * a value already in the file when the plugin loads was not a click.
+     */
+    let withdrawing = false;
+    const runWithdrawal = async (to: string): Promise<void> => {
+      if (withdrawing) return;
+      withdrawing = true;
+      const network = current().network ?? DEFAULT_NETWORK;
+
+      const finish = async (line: string) => {
+        await settingsCtx.settings
+          .update(NS, { withdrawStatus: line })
+          .catch((error: unknown) =>
+            ctx.logger.warn(`llm-edgerouter: could not report the withdrawal: ${(error as Error).message}`),
+          );
+      };
+
+      try {
+        // Cleared first, so this instruction cannot outlive the attempt.
+        await settingsCtx.settings.update(NS, { withdrawTo: '' });
+
+        if (!isWithdrawDestination(to, network)) {
+          ctx.logger.warn(`llm-edgerouter: refused a withdrawal to "${to}" — not an address on ${network}`);
+          await finish(`refused — "${to}" is not an address on ${network}`);
+          return;
+        }
+        if (!wallet && !evmWallet) {
+          await finish('refused — this provider is not paying from a local wallet');
+          return;
+        }
+
+        ctx.logger.info(`llm-edgerouter: withdrawing everything to ${to}`);
+        const swept = wallet ? await wallet.sweep(to) : await evmWallet!.sweep(to);
+        const moved = formatAmount(network, swept.amountMinor);
+        ctx.logger.info(`llm-edgerouter: withdrew ${moved} to ${to}`);
+        await finish(`sent ${moved} to ${to}`);
+
+        await settleBalance();
+      } catch (error) {
+        const message = (error as Error).message;
+        ctx.logger.error(`llm-edgerouter: the withdrawal failed — ${message}`);
+        await finish(`failed — ${message}`);
+      } finally {
+        withdrawing = false;
+      }
+    };
 
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
       setSource: (source) => {
         current = source;
       },
       onChange: () => {
+        const to = current().withdrawTo?.trim();
+        if (to) {
+          void runWithdrawal(to);
+          // Deliberately not restarting the payment source: nothing about the
+          // wallet, network, or gate changed, and tearing the signer down
+          // mid-withdrawal would only widen the window for a failed call.
+          return;
+        }
         /*
           Everything else resolves per request. The payment source does not: it
           holds a wallet, a poll, and possibly a connection to another process,
