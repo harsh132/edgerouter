@@ -152,6 +152,9 @@ export interface Config {
   ensName?: string;
   /** Reported, not configured: what the naming attempt did or why it did not. */
   ensStatus?: string;
+  /** Reported: the most recent chat to be named, and how it went. */
+  ensChatName?: string;
+  ensChatStatus?: string;
 
   /**
    * Whether this session hands out allowances to sub-agents.
@@ -216,6 +219,8 @@ export const Config: z<Config> = z.object({
     .description('Claim an ENS name for this session. Costs Sepolia gas the first time.'),
   ensName: z.string().description('Reported by the plugin.'),
   ensStatus: z.string().description('Reported by the plugin.'),
+  ensChatName: z.string().description('Reported by the plugin.'),
+  ensChatStatus: z.string().description('Reported by the plugin.'),
 
   delegation: z
     .boolean()
@@ -510,6 +515,60 @@ export function apply(ctx: Context, config: Config): void {
   const treeReporter = createReporter();
   let delegation: Delegation | null = null;
 
+  /*
+    Chats already named, so a chat that makes twenty calls mints once.
+
+    In memory, and that is the right lifetime: `ensureAgentName` resolves before
+    it mints, so the worst a restart costs is one extra lookup per chat rather
+    than a duplicate registration.
+  */
+  const namedChats = new Set<string>();
+  const chatReporter = createReporter();
+
+  /**
+   * Gives a chat its own name, the first time it spends.
+   *
+   * On first payment rather than on first message, deliberately. Naming costs
+   * gas, and a chat that has not bought anything is not an agent that acts —
+   * naming every opened window would spend real money to record that somebody
+   * typed "hi".
+   *
+   * The name hangs beneath this install's own name, so the hierarchy says what
+   * is true: one wallet, many chats, and sub-agents beneath those.
+   */
+  const nameChat = async (sessionId: string | undefined): Promise<void> => {
+    const now = current();
+    if (!sessionId || !now.ensNames || !now.ensName) return;
+    if (namedChats.has(sessionId)) return;
+    // Claimed before the await, so twenty concurrent calls mint once.
+    namedChats.add(sessionId);
+
+    try {
+      const { chatLabelFor, ensureAgentName, openEnsSigner } = await import('../../ens/src/index');
+      const ensSigner = openEnsSigner();
+      const named = await ensureAgentName(
+        { public: ensSigner.public, wallet: ensSigner.wallet },
+        {
+          label: chatLabelFor(sessionId),
+          parent: now.ensName,
+          owner: ensSigner.address,
+        },
+      );
+      chatReporter.publish(named.name, named.minted ? 'named on first payment' : 'already named');
+      if (named.minted) ctx.logger.info(`llm-edgerouter: this chat is ${named.name}`);
+    } catch (error) {
+      /*
+        Forgotten rather than remembered as done, so the next call can try
+        again. A chat that failed to be named is not a chat that must stay
+        anonymous.
+      */
+      namedChats.delete(sessionId);
+      ctx.logger.warn(
+        `llm-edgerouter: could not name this chat — ${(error as Error).message}`,
+      );
+    }
+  };
+
   /** Publishes the allowance tree as the settings page wants to read it. */
   const reportTree = () => {
     if (!delegation) {
@@ -774,6 +833,9 @@ export function apply(ctx: Context, config: Config): void {
   const onPaid = (paid: Paid) => {
     spent += paid.amount;
     calls += 1;
+    // Fire and forget: a name is worth having, and never worth delaying a
+    // response the user has already paid for.
+    void nameChat(paid.sessionId);
     const each =
       `${formatAmount(paid.network, paid.amount)}` +
       ` (total ${formatAmount(paid.network, spent)} over ${calls})`;
@@ -1141,6 +1203,16 @@ export function apply(ctx: Context, config: Config): void {
         withdrawing = false;
       }
     };
+
+    chatReporter.attach((ensChatName, ensChatStatus) => {
+      void settingsCtx.settings
+        .update(NS, { ensChatName, ensChatStatus })
+        .catch((error: unknown) =>
+          ctx.logger.warn(
+            `llm-edgerouter: could not report the chat name: ${(error as Error).message}`,
+          ),
+        );
+    });
 
     nameReporter.attach((ensName, ensStatus) => {
       void settingsCtx.settings

@@ -38,6 +38,18 @@ type Clients = { public: PublicClient; wallet: WalletClient };
 export const sessionLabelFor = (address: Address, seed = ''): string =>
   `s-${keccak256(stringToHex(`${address.toLowerCase()}/${seed}`)).slice(2, 10)}`;
 
+/**
+ * A short, stable label for one chat.
+ *
+ * Hashed rather than truncated. Session ids are structured — a prefix and a
+ * uuid — so slicing them would put the same characters in every label and make
+ * two chats look related when they are not. A hash spreads them, and the same
+ * chat always lands on the same name, so a retry after a failed mint claims the
+ * name it was already trying to claim.
+ */
+export const chatLabelFor = (sessionId: string): string =>
+  `c-${keccak256(stringToHex(sessionId)).slice(2, 10)}`;
+
 /** The registry a name mints its children in, or null when it has none. */
 export const registryOf = async (
   client: PublicClient,

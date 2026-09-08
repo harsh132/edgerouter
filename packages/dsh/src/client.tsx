@@ -57,6 +57,9 @@ type Section = {
   ensName?: string;
   /** Reported by the Node half: what the naming attempt did. */
   ensStatus?: string;
+  /** Reported by the Node half: the most recent chat to be named. */
+  ensChatName?: string;
+  ensChatStatus?: string;
 
   delegation?: boolean;
   delegationUrl?: string;
@@ -295,34 +298,58 @@ const Withdraw = ({
 };
 
 /**
- * This session's public name.
+ * The names this install answers to.
  *
- * The address above says where the money is. This says who is spending it —
- * and unlike the address, it is a name a person can read out, and one that the
- * budget authority checks before it signs anything. Revoking the name stops the
- * spending, which is why this is a section rather than a footnote.
+ * Two of them, and the distinction is the one thing this card has to get right,
+ * because an earlier version called the first a "session name" and sent a user
+ * looking for it beside a chat that did not have one:
  *
- * The toggle is off until asked, because claiming a name costs Sepolia gas from
- * the same wallet. A provider that spends money nobody asked it to spend is the
- * thing this whole project argues against, so the first mint is a decision.
+ *   the wallet's name   one per install, claimed once. This is the agent.
+ *   a chat's name       one per chat, minted the first time that chat pays.
+ *
+ * Chats are named on first payment rather than on first message, because
+ * naming costs gas and a chat that has bought nothing is not an actor. Only the
+ * most recent one is shown — settings are global, and a per-chat panel would
+ * need a per-chat place to live.
+ *
+ * The whole thing is off until asked, because the first mint spends real money.
  */
 const Naming = ({
   scope,
   enabled,
   name,
   status,
+  chatName,
+  chatStatus,
 }: {
   scope: { set(field: string, value: unknown): Promise<void> };
   enabled: boolean;
   name: string;
   status: string;
+  chatName: string;
+  chatStatus: string;
 }): ReactNode =>
   h('div', { style: style.card }, [
     h('div', { key: 'l', style: style.label }, 'Name'),
     ...(name
       ? [
+          h('div', { key: 'nl', style: style.note }, 'This wallet'),
           h('div', { key: 'n', style: style.address }, name),
           h('p', { key: 's', style: style.note }, status),
+          ...(chatName
+            ? [
+                h('div', { key: 'cl', style: { ...style.note, marginTop: '6px' } }, 'Most recent chat'),
+                h('div', { key: 'c', style: style.address }, chatName),
+                h('p', { key: 'cs', style: style.note }, chatStatus),
+              ]
+            : [
+                h(
+                  'p',
+                  { key: 'cn', style: style.note },
+                  'Chats are named the first time they pay for something, so an ' +
+                    'unused chat costs no gas.',
+                ),
+              ]),
         ]
       : [
           h(
@@ -330,7 +357,7 @@ const Naming = ({
             { key: 'n', style: style.note },
             enabled
               ? status || 'Claiming a name…'
-              : 'This session can claim an ENS name, which is what the budget authority ' +
+              : 'This wallet can claim an ENS name, which is what the budget authority ' +
                   'checks before it signs a payment. Sub-agents get names beneath it, so ' +
                   'revoking one stops everything under it too.',
           ),
@@ -649,6 +676,8 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
       enabled: Boolean(section.ensNames),
       name: section.ensName ?? '',
       status: section.ensStatus ?? '',
+      chatName: section.ensChatName ?? '',
+      chatStatus: section.ensChatStatus ?? '',
     }),
 
     /*

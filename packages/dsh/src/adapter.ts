@@ -41,6 +41,14 @@ export type Paid = {
   transaction?: string;
   signingMs: number;
   requestMs: number;
+  /**
+   * The chat this call belongs to, when the loop stamped one.
+   *
+   * Carried so a chat that spends money can be given a name. Absent for
+   * auxiliary calls the harness makes on its own account — a title generation
+   * is not an agent and should not become one.
+   */
+  sessionId?: string;
 };
 
 export type EdgerouterAdapterOptions = {
@@ -223,6 +231,7 @@ export class EdgerouterAdapter extends LlmAdapter {
         amount: BigInt(quote.amount),
         network: quote.network,
         ...(typeof transaction === 'string' ? { transaction } : {}),
+        ...(options.sessionId ? { sessionId: String(options.sessionId) } : {}),
         signingMs,
         requestMs: paidRequestMs,
       });
