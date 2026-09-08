@@ -15,3 +15,4 @@ export * from './delegate/wire';
 export * from './delegate/authority';
 export * from './delegate/server';
 export * from './delegate/client';
+export * from './delegate/node-server';

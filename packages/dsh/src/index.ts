@@ -50,6 +50,7 @@ import {
   type PaymentSigner,
 } from '../../sdk/src/index';
 import { EdgerouterAdapter, type Paid } from './adapter';
+import { startDelegation, type Delegation } from './delegation';
 
 export { EdgerouterAdapter } from './adapter';
 export type { Paid, EdgerouterAdapterOptions } from './adapter';
@@ -151,6 +152,41 @@ export interface Config {
   ensName?: string;
   /** Reported, not configured: what the naming attempt did or why it did not. */
   ensStatus?: string;
+
+  /**
+   * Whether this session hands out allowances to sub-agents.
+   *
+   * Off by default. Turning it on starts a loopback server holding a budget: a
+   * bearer capability reaching it can spend that budget, which is the intended
+   * shape between an agent and its own sub-agents and nothing to enable idly.
+   */
+  delegation?: boolean;
+  /** How much of the wallet delegation may hand out, smallest unit. */
+  delegationBudget?: string;
+  /** Reported: where sub-agents point, and what the tree currently holds. */
+  delegationUrl?: string;
+  delegationStatus?: string;
+  /** Reported: the allowance tree, as JSON, for the settings page to render. */
+  delegationTree?: string;
+
+  /**
+   * A command: `label|amountMinor|hours`. Cleared once acted on.
+   *
+   * Three fields in a string because settings carry scalars, and a mint needs
+   * all three to be one decision — a partially applied mint is an allowance
+   * with a size and no lifetime.
+   */
+  delegateMint?: string;
+  /** A command: the allowance to revoke. Cleared once acted on. */
+  delegateRevoke?: string;
+  /**
+   * Reported once, then cleared: the capability a sub-agent needs.
+   *
+   * The only moment a capability exists outside this process. It is bounded —
+   * it spends its own node and nothing else — but it is a bearer token, so it
+   * is shown once and wiped rather than kept in a file that syncs.
+   */
+  delegateCapability?: string;
 }
 
 export const Config: z<Config> = z.object({
@@ -180,6 +216,18 @@ export const Config: z<Config> = z.object({
     .description('Claim an ENS name for this session. Costs Sepolia gas the first time.'),
   ensName: z.string().description('Reported by the plugin.'),
   ensStatus: z.string().description('Reported by the plugin.'),
+
+  delegation: z
+    .boolean()
+    .default(false)
+    .description('Hand out spending allowances to sub-agents over loopback.'),
+  delegationBudget: z.string().description('What delegation may hand out, smallest unit.'),
+  delegationUrl: z.string().description('Reported by the plugin.'),
+  delegationStatus: z.string().description('Reported by the plugin.'),
+  delegationTree: z.string().description('Reported by the plugin.'),
+  delegateMint: z.string().description('label|amountMinor|hours. Cleared by the plugin.'),
+  delegateRevoke: z.string().description('An allowance to revoke. Cleared by the plugin.'),
+  delegateCapability: z.string().description('Shown once by the plugin, then cleared.'),
 });
 
 /**
@@ -402,6 +450,10 @@ export function apply(ctx: Context, config: Config): void {
       const first = signer === undefined;
       signer = wallet.signer();
       lastBalanceMinor = funding.balanceMinor;
+      // Delegation needs a signer, and at boot there is not one yet — the
+      // wallet may be unfunded, or the mirror node may still be answering. This
+      // is the moment that changes, so it is the moment to try again.
+      if (first) void syncDelegation();
       publish(
         wallet.evmAddress,
         `ready — ${funding.accountId} holds ${formatAmount(wallet.network, funding.balanceMinor)}`,
@@ -450,6 +502,81 @@ export function apply(ctx: Context, config: Config): void {
   const nameReporter = createReporter();
   const reportName = (name: string, status: string) => nameReporter.publish(name, status);
 
+  /*
+    Delegation's own reporter. Same reason again — the tree changes at moments
+    nobody is waiting for, and a report that lands before the settings service
+    exists must be replayed rather than dropped.
+  */
+  const treeReporter = createReporter();
+  let delegation: Delegation | null = null;
+
+  /** Publishes the allowance tree as the settings page wants to read it. */
+  const reportTree = () => {
+    if (!delegation) {
+      treeReporter.publish('', 'not running');
+      return;
+    }
+    const state = delegation.view();
+    treeReporter.publish(state.url, JSON.stringify({ status: state.status, allowances: state.allowances }));
+  };
+
+  /**
+   * Starts or stops the loopback authority to match the settings.
+   *
+   * The budget is taken from settings and defaults to the per-call cap times
+   * twenty — a number with no theory behind it beyond "enough to delegate a few
+   * allowances from", chosen because a required field here would mean
+   * delegation could not be switched on with one click.
+   */
+  const syncDelegation = async (): Promise<void> => {
+    const now = current();
+
+    if (!now.delegation) {
+      if (delegation) {
+        await delegation.stop();
+        delegation = null;
+        ctx.logger.info('llm-edgerouter: delegation stopped');
+      }
+      reportTree();
+      return;
+    }
+    if (delegation) return;
+
+    if (!signer) {
+      treeReporter.publish('', `cannot delegate yet — ${unavailable}`);
+      return;
+    }
+
+    try {
+      const network = now.network ?? DEFAULT_NETWORK;
+      const budget = now.delegationBudget?.trim()
+        ? BigInt(now.delegationBudget.trim())
+        : maxAmount() * 20n;
+
+      /*
+        The guard is attached only when naming is on. Without a name there is
+        nothing to check, and refusing every allowance for lacking one would
+        make delegation depend on a chain the payment does not touch.
+      */
+      const names = now.ensNames
+        ? (await import('../../ens/src/index')).ensNameGuard()
+        : undefined;
+
+      delegation = await startDelegation({
+        signer,
+        network,
+        fundedMinor: budget,
+        ...(names ? { names } : {}),
+        log: (line) => ctx.logger.info(line),
+      });
+      reportTree();
+    } catch (error) {
+      const message = (error as Error).message;
+      treeReporter.publish('', `delegation failed to start: ${message}`);
+      ctx.logger.error(`llm-edgerouter: delegation failed to start — ${message}`);
+    }
+  };
+
   /**
    * The same, for an EVM chain.
    *
@@ -486,6 +613,7 @@ export function apply(ctx: Context, config: Config): void {
       const first = signer === undefined;
       signer = evmWallet.signer();
       lastBalanceMinor = funding.tokenMinor;
+      if (first) void syncDelegation();
       publish(
         evmWallet.address,
         `ready — holds ${formatAmount(evmWallet.network, funding.tokenMinor)}`,
@@ -602,7 +730,12 @@ export function apply(ctx: Context, config: Config): void {
     services use it — but it is mixed onto the context at runtime rather than
     declared on the `Context` interface, hence the cast.
   */
-  (ctx as unknown as { effect(run: () => () => void): unknown }).effect(() => () => clearPolling());
+  (ctx as unknown as { effect(run: () => () => void): unknown }).effect(() => () => {
+    clearPolling();
+    // The authority holds a listening socket. Leaving one behind on unload
+    // would keep a port — and a budget — alive with nothing owning it.
+    void delegation?.stop();
+  });
 
   /*
     A running total for the session, printed on every call because the entire
@@ -745,6 +878,7 @@ export function apply(ctx: Context, config: Config): void {
   */
   void start();
   void claimName();
+  void syncDelegation();
   ctx.llm.registerAdapter([PROVIDER], adapter);
 
   /*
@@ -777,6 +911,108 @@ export function apply(ctx: Context, config: Config): void {
      * For the same reason it only ever runs from a change, never from startup:
      * a value already in the file when the plugin loads was not a click.
      */
+    treeReporter.attach((delegationUrl, delegationStatus) => {
+      /*
+        Two fields from one report: the URL a sub-agent points at, and the tree
+        itself as JSON. The status line doubles as the tree because a reporter
+        carries two strings — which is enough, and cheaper than a third channel
+        that could disagree with this one.
+      */
+      const tree = delegationStatus.startsWith('{') ? delegationStatus : '';
+      const status = tree ? (JSON.parse(tree) as { status: string }).status : delegationStatus;
+      void settingsCtx.settings
+        .update(NS, { delegationUrl, delegationStatus: status, delegationTree: tree })
+        .catch((error: unknown) =>
+          ctx.logger.warn(
+            `llm-edgerouter: could not report the allowance tree: ${(error as Error).message}`,
+          ),
+        );
+    });
+
+    /**
+     * Mints an allowance, names it, and shows the capability once.
+     *
+     * The ENS name is minted *before* the capability is reported, and that
+     * order is the point: with naming on, the authority refuses to sign for a
+     * node whose name does not resolve, so handing out a capability whose name
+     * does not exist yet would be handing out something that cannot spend.
+     */
+    const runMint = async (command: string): Promise<void> => {
+      const [label, amountText, hoursText] = command.split('|');
+      const clear = () => settingsCtx.settings.update(NS, { delegateMint: '' }).catch(() => {});
+
+      try {
+        await clear();
+
+        if (!delegation) throw new Error('delegation is not running');
+        if (!label || !/^[a-z0-9][a-z0-9-]{0,30}$/.test(label)) {
+          throw new Error(`"${label}" is not a usable allowance name (a-z, 0-9 and dashes)`);
+        }
+        const amountMinor = BigInt(amountText ?? '0');
+        if (amountMinor <= 0n) throw new Error('an allowance needs an amount above zero');
+        const hours = Number(hoursText ?? '24');
+        if (!Number.isFinite(hours) || hours <= 0) throw new Error('hours must be above zero');
+
+        const now = current();
+        /*
+          The allowance id is the ENS name when there is one. That is what makes
+          the two trees one tree: the node the authority charges and the name
+          the guard resolves are the same string.
+        */
+        const sessionName = now.ensName;
+        const child = sessionName ? `${label}.${sessionName}` : label;
+
+        if (sessionName && now.ensNames) {
+          const { ensureAgentName, openEnsSigner } = await import('../../ens/src/index');
+          const ensSigner = openEnsSigner();
+          await ensureAgentName(
+            { public: ensSigner.public, wallet: ensSigner.wallet },
+            {
+              label,
+              parent: sessionName,
+              owner: ensSigner.address,
+              budgetMinor: amountMinor,
+              asset: now.network ?? DEFAULT_NETWORK,
+              gate: now.baseURL ?? DEFAULT_BASE_URL,
+            },
+          );
+        }
+
+        const capability = await delegation.mint({ child, amountMinor, hours });
+        reportTree();
+        await settingsCtx.settings.update(NS, {
+          delegateCapability: capability,
+          delegationStatus: `minted ${child}`,
+        });
+      } catch (error) {
+        const message = (error as Error).message;
+        ctx.logger.warn(`llm-edgerouter: could not mint an allowance — ${message}`);
+        await settingsCtx.settings
+          .update(NS, { delegationStatus: `mint failed — ${message}` })
+          .catch(() => {});
+      }
+    };
+
+    /** Empties an allowance and everything beneath it. */
+    const runRevoke = async (node: string): Promise<void> => {
+      try {
+        await settingsCtx.settings.update(NS, { delegateRevoke: '' });
+        if (!delegation) throw new Error('delegation is not running');
+
+        const recovered = await delegation.revoke(node);
+        reportTree();
+        await settingsCtx.settings.update(NS, {
+          delegationStatus: `revoked ${node}, recovering ${recovered.toString()}`,
+        });
+      } catch (error) {
+        const message = (error as Error).message;
+        ctx.logger.warn(`llm-edgerouter: could not revoke ${node} — ${message}`);
+        await settingsCtx.settings
+          .update(NS, { delegationStatus: `revoke failed — ${message}` })
+          .catch(() => {});
+      }
+    };
+
     let withdrawing = false;
     const runWithdrawal = async (to: string): Promise<void> => {
       if (withdrawing) return;
@@ -836,6 +1072,17 @@ export function apply(ctx: Context, config: Config): void {
         current = source;
       },
       onChange: () => {
+        const mint = current().delegateMint?.trim();
+        if (mint) {
+          void runMint(mint);
+          return;
+        }
+        const revoke = current().delegateRevoke?.trim();
+        if (revoke) {
+          void runRevoke(revoke);
+          return;
+        }
+
         const to = current().withdrawTo?.trim();
         if (to) {
           void runWithdrawal(to);
@@ -855,6 +1102,7 @@ export function apply(ctx: Context, config: Config): void {
         // it off leaves the name alone: it is registered on a public chain and
         // a settings toggle does not un-register anything.
         void claimName();
+        void syncDelegation();
       },
     });
   });

@@ -57,6 +57,24 @@ type Section = {
   ensName?: string;
   /** Reported by the Node half: what the naming attempt did. */
   ensStatus?: string;
+
+  delegation?: boolean;
+  delegationUrl?: string;
+  delegationStatus?: string;
+  /** The allowance tree as JSON, rendered by the Node half. */
+  delegationTree?: string;
+  delegateMint?: string;
+  delegateRevoke?: string;
+  /** Shown once, then cleared by the Node half. */
+  delegateCapability?: string;
+};
+
+type Allowance = {
+  id: string;
+  parent: string | null;
+  depth: number;
+  balanceMinor: string;
+  balance: string;
 };
 
 /**
@@ -338,6 +356,209 @@ const Naming = ({
     ),
   ]);
 
+/**
+ * Allowances handed to sub-agents.
+ *
+ * The half of this project that has been real for weeks and invisible the whole
+ * time: a budget authority signs payments for sub-agents against allowances
+ * that cannot be widened, and until now the only way to see one was a terminal.
+ *
+ * Nothing here holds a key or a capability. The page writes commands into
+ * settings and the Node half — which owns the authority, the root capability
+ * and the wallet — carries them out and reports back. The one exception is a
+ * freshly minted capability, which is shown once because a sub-agent has to be
+ * handed it somehow, and then wiped.
+ */
+const Delegation = ({
+  scope,
+  enabled,
+  url,
+  status,
+  tree,
+  capability,
+}: {
+  scope: { set(field: string, value: unknown): Promise<void> };
+  enabled: boolean;
+  url: string;
+  status: string;
+  tree: string;
+  capability: string;
+}): ReactNode => {
+  const [label, setLabel] = useState('');
+  const [amount, setAmount] = useState('');
+  const [hours, setHours] = useState('24');
+
+  let allowances: Allowance[] = [];
+  try {
+    allowances = tree ? ((JSON.parse(tree) as { allowances: Allowance[] }).allowances ?? []) : [];
+  } catch {
+    /*
+      A tree that will not parse is a tree that is not shown. The Node half
+      rewrites it on every change, so the next report repairs this rather than
+      leaving the page stuck on a parse error.
+    */
+    allowances = [];
+  }
+
+  const ready = /^[a-z0-9][a-z0-9-]{0,30}$/.test(label) && /^[0-9]+$/.test(amount) && Number(amount) > 0;
+
+  if (!enabled) {
+    return h('div', { style: style.card }, [
+      h('div', { key: 'l', style: style.label }, 'Delegation'),
+      h(
+        'p',
+        { key: 'n', style: style.note },
+        'Hand a sub-agent an allowance instead of a key. It spends against a budget ' +
+          'it cannot widen, you can take it back at any time, and it never sees the ' +
+          'wallet. Runs on loopback, for agents on this machine.',
+      ),
+      h(
+        'div',
+        { key: 'r', style: style.row },
+        h(
+          'button',
+          { type: 'button', style: style.button, onClick: () => void scope.set('delegation', true) },
+          'Turn on delegation',
+        ),
+      ),
+    ]);
+  }
+
+  return h('div', { style: style.card }, [
+    h('div', { key: 'l', style: { ...style.row, ...style.label } }, [
+      h('span', { key: 'd', style: style.dot(Boolean(url)) }),
+      h('span', { key: 't' }, 'Delegation'),
+    ]),
+    h('p', { key: 's', style: style.note }, status || 'starting…'),
+    ...(url
+      ? [
+          h('div', { key: 'u', style: style.label }, 'Sub-agents point at'),
+          h('div', { key: 'ua', style: style.address }, url),
+        ]
+      : []),
+
+    /*
+      Shown once. The Node half clears the field after this render, so a
+      capability nobody copied has to be minted again — the correct trade for a
+      bearer token.
+    */
+    ...(capability
+      ? [
+          h('div', { key: 'ck', style: { ...style.card, borderColor: '#d2493a' } }, [
+            h('div', { key: 'l', style: style.label }, 'Capability — shown once'),
+            h('div', { key: 'v', style: style.address }, capability),
+            h('div', { key: 'r', style: style.row }, [
+              h(CopyButton, { key: 'c', value: capability }),
+              h(
+                'button',
+                {
+                  key: 'x',
+                  type: 'button',
+                  style: style.button,
+                  onClick: () => void scope.set('delegateCapability', ''),
+                },
+                'Done',
+              ),
+            ]),
+            h(
+              'p',
+              { key: 'n', style: style.note },
+              'Give this to the sub-agent as EDGEROUTER_CAPABILITY. Anyone holding it ' +
+                'can spend that allowance and nothing else.',
+            ),
+          ]),
+        ]
+      : []),
+
+    ...(allowances.length
+      ? [
+          h('div', { key: 'ln', style: style.label }, 'Allowances'),
+          ...allowances.map((node) =>
+            h('div', { key: node.id, style: { ...style.row, justifyContent: 'space-between' } }, [
+              h(
+                'span',
+                { key: 'n', style: { ...style.address, flex: '1 1 auto' } },
+                `${'\u00a0\u00a0'.repeat(node.depth)}${node.id}`,
+              ),
+              h('span', { key: 'b', style: style.note }, node.balance),
+              ...(node.parent === null
+                ? []
+                : [
+                    h(
+                      'button',
+                      {
+                        key: 'r',
+                        type: 'button',
+                        style: style.button,
+                        onClick: () => void scope.set('delegateRevoke', node.id),
+                      },
+                      'Revoke',
+                    ),
+                  ]),
+            ]),
+          ),
+        ]
+      : []),
+
+    h('div', { key: 'mk', style: style.label }, 'New allowance'),
+    h('div', { key: 'mf', style: style.row }, [
+      h('input', {
+        key: 'l',
+        style: { ...style.input, flex: '1 1 120px' },
+        value: label,
+        placeholder: 'researcher',
+        spellCheck: false,
+        onChange: (event: { target: { value: string } }) => setLabel(event.target.value),
+      }),
+      h('input', {
+        key: 'a',
+        style: { ...style.input, flex: '1 1 140px' },
+        value: amount,
+        placeholder: 'amount (smallest unit)',
+        spellCheck: false,
+        onChange: (event: { target: { value: string } }) => setAmount(event.target.value),
+      }),
+      h('input', {
+        key: 'h',
+        style: { ...style.input, flex: '0 1 80px' },
+        value: hours,
+        placeholder: 'hours',
+        spellCheck: false,
+        onChange: (event: { target: { value: string } }) => setHours(event.target.value),
+      }),
+      h(
+        'button',
+        {
+          key: 'go',
+          type: 'button',
+          disabled: !ready,
+          style: ready ? style.button : { ...style.button, ...style.disabled },
+          onClick: () => {
+            void scope.set('delegateMint', `${label}|${amount}|${hours || '24'}`);
+            setLabel('');
+            setAmount('');
+          },
+        },
+        'Delegate',
+      ),
+    ]),
+    h(
+      'p',
+      { key: 'off', style: style.note },
+      'Amounts are in the smallest unit — 100000000 is one hbar.',
+    ),
+    h(
+      'div',
+      { key: 'stop', style: style.row },
+      h(
+        'button',
+        { type: 'button', style: style.button, onClick: () => void scope.set('delegation', false) },
+        'Turn off delegation',
+      ),
+    ),
+  ]);
+};
+
 const Page = ({ ctx }: { ctx: Context }): ReactNode => {
   const scope = ctx.settingsScope.bind<Section>({ namespace: NS });
   const snapshot = useSyncExternalStore(
@@ -411,6 +632,16 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
       ]),
       h('p', { key: 'status', style: style.note }, status),
     ]),
+
+    h(Delegation, {
+      key: 'delegation',
+      scope,
+      enabled: Boolean(section.delegation),
+      url: section.delegationUrl ?? '',
+      status: section.delegationStatus ?? '',
+      tree: section.delegationTree ?? '',
+      capability: section.delegateCapability ?? '',
+    }),
 
     h(Naming, {
       key: 'naming',
