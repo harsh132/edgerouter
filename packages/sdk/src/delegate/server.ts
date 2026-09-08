@@ -47,7 +47,9 @@ const fail = (error: unknown): Response => {
         ? 401
         : error.code === 'budget_exhausted'
           ? 402
-          : error.code === 'bad_request'
+          : error.code === 'name_not_resolving'
+            ? 403
+            : error.code === 'bad_request'
             ? 400
             : error.code === 'signing_failed'
               ? 502

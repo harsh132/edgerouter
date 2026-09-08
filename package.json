@@ -14,6 +14,8 @@
     "facilitator-check": "bun apps/gate/facilitator-check.ts",
     "pay-check": "bun packages/sdk/pay-check.ts",
     "live-check": "bun packages/dsh/live-check.ts",
+    "ens-check": "bun packages/ens/live-check.ts",
+    "ens-guard-check": "bun packages/ens/guard-live-check.ts",
     "authority": "bun packages/sdk/authority-serve.ts",
     "wallet": "bun packages/sdk/wallet.ts",
     "fund-check": "bun packages/sdk/fund-check.ts",

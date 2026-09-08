@@ -544,5 +544,122 @@ check(
   'health reports liveness, not what anyone holds',
 );
 
+/* --------------------------------------------------------------- name guard */
+
+section('A name that stops resolving stops spending');
+
+{
+  /*
+    The guard is what makes ENS structural rather than decorative. Without it
+    the authority signs whether or not a name exists, and "every agent has a
+    name" is a caption. These checks pin the three behaviours that matter, none
+    of which need a chain: the guard is an interface precisely so it can be
+    exercised without one.
+  */
+  const asked: string[] = [];
+  let answer: string | null = null;
+
+  const authority = await authorityWith({
+    names: {
+      async check(node) {
+        asked.push(node);
+        return answer;
+      },
+    },
+  });
+
+  const granted = await authority.mint({
+    parent: authority.rootToken,
+    child: 'agent.edgerouter.eth',
+    amountMinor: 10_000n,
+    expiresAt: Date.now() + HOUR,
+  });
+  const opened = await authority.open(granted.capability);
+
+  const pay = () =>
+    authority.authorize({
+      token: opened.token,
+      policy: opened.policy,
+      x402Version: 2,
+      requirements: quote({ amount: '1000' }),
+    });
+
+  const first = await pay();
+  check(first.remainingMinor === 9_000n, 'a resolving name spends normally');
+  check(asked.includes('agent.edgerouter.eth'), 'and the node was actually checked');
+
+  answer = 'agent.edgerouter.eth does not resolve to an address';
+  await refuses('name_not_resolving', 'a revoked name cannot spend', pay);
+
+  /*
+    The budget is untouched by the refusal. A name check that charged would
+    make revocation a way to drain someone.
+  */
+  check(
+    authority.balances('agent.edgerouter.eth')[0]!.balanceMinor === 9_000n,
+    'and the refusal costs the node nothing',
+  );
+
+  answer = null;
+  const third = await pay();
+  check(third.remainingMinor === 8_000n, 'restoring the name restores spending');
+}
+
+{
+  /*
+    The order is load-bearing: everything decidable locally runs first, so a
+    request that was already doomed never costs a network call.
+  */
+  const asked: string[] = [];
+  const authority = await authorityWith({
+    names: {
+      async check(node) {
+        asked.push(node);
+        return null;
+      },
+    },
+  });
+
+  const granted = await authority.mint({
+    parent: authority.rootToken,
+    child: 'broke.edgerouter.eth',
+    amountMinor: 100n,
+    // A ceiling above the call, so the *budget* is what refuses it: an unset
+    // ceiling defaults to the amount delegated, and would refuse first.
+    ceilingMinor: 5_000n,
+    expiresAt: Date.now() + HOUR,
+  });
+  const opened = await authority.open(granted.capability);
+
+  await refuses('budget_exhausted', 'an unaffordable call is refused on the budget', () =>
+    authority.authorize({
+      token: opened.token,
+      policy: opened.policy,
+      x402Version: 2,
+      requirements: quote({ amount: '1000' }),
+    }),
+  );
+  check(asked.length === 0, 'and never reaches the network to find that out');
+}
+
+{
+  // An authority with no guard is the one that existed before names did.
+  const authority = await authorityWith();
+  const granted = await authority.mint({
+    parent: authority.rootToken,
+    child: 'nameless',
+    amountMinor: 5_000n,
+    expiresAt: Date.now() + HOUR,
+  });
+  const opened = await authority.open(granted.capability);
+  const paid = await authority.authorize({
+    token: opened.token,
+    policy: opened.policy,
+    x402Version: 2,
+    requirements: quote({ amount: '1000' }),
+  });
+  check(paid.remainingMinor === 4_000n, 'without a guard, nodes need no name at all');
+}
+
 console.log(failures === 0 ? '\nAll checks pass.' : `\n${failures} FAILED.`);
 if (failures > 0) process.exit(1);

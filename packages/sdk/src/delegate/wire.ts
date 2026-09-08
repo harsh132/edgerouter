@@ -89,6 +89,7 @@ export type AuthorityRefusal =
   | 'host_not_permitted'
   | 'unbounded_capability'
   | 'budget_exhausted'
+  | 'name_not_resolving'
   | 'depth_exceeded'
   | 'duplicate_node'
   | 'not_a_descendant'

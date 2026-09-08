@@ -51,6 +51,24 @@ import {
 import type { PaymentRequirements, PaymentSigner } from '../pay/types';
 import type { AuthorityRefusal } from './wire';
 
+/**
+ * Something that can say whether a node's name still stands.
+ *
+ * An interface rather than an ENS client, because the authority must not depend
+ * on a chain it does not pay on. The implementation lives in `@edgerouter/ens`;
+ * what this file knows is that identity can be checked and can fail.
+ */
+export type NameGuard = {
+  /**
+   * @returns why the name is unusable, or null when it resolves.
+   *
+   * A string rather than a boolean so the refusal can say what happened —
+   * "does not resolve" and "could not be checked" are different problems and
+   * lead to different actions.
+   */
+  check(node: string): Promise<string | null>;
+};
+
 export type AuthorityOptions = {
   /** Signs every payment this authority authorises. Holds the only key. */
   signer: PaymentSigner;
@@ -74,6 +92,19 @@ export type AuthorityOptions = {
   allowPayTo?: readonly string[];
   /** Deepest delegation chain permitted. Unbounded chains amplify spend. */
   maxDepth?: number;
+  /**
+   * Checks that a node's name still resolves, before anything is signed.
+   *
+   * This is what makes a name load-bearing rather than a label. The budget
+   * tree already knows what a node may spend; the guard adds the requirement
+   * that the node still *exists* as a public name — so revocation can be a
+   * registry write anybody can verify, rather than a private deletion only
+   * this process can see.
+   *
+   * Optional, and absent means unchecked: an authority with no guard is the
+   * one that existed before names did, and still works.
+   */
+  names?: NameGuard;
   /** Injectable for tests. */
   now?: () => number;
 };
@@ -393,6 +424,21 @@ export const createAuthority = async (options: AuthorityOptions): Promise<Author
           'budget_exhausted',
           `${node.id} holds ${node.balanceMinor} but this call costs ${amount}`,
         );
+      }
+
+      /*
+        Identity last, because it is the only check here that leaves the
+        process. Everything decidable from local state has already run, so a
+        request that was going to be refused anyway never costs a network call
+        — and this one still runs before the key is touched.
+
+        A name that stops resolving stops spending. That is the point: it makes
+        revocation something a third party can perform and anyone can verify,
+        rather than a deletion visible only inside this process.
+      */
+      if (options.names) {
+        const problem = await options.names.check(node.id);
+        if (problem) throw new AuthorityRefused('name_not_resolving', problem);
       }
 
       let payload: Record<string, unknown>;
