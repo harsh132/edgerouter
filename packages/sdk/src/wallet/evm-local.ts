@@ -34,6 +34,7 @@ const RPC: Record<string, string> = {
   'eip155:80002': 'https://polygon-amoy-bor-rpc.publicnode.com',
   'eip155:8453': 'https://base-rpc.publicnode.com',
   'eip155:84532': 'https://base-sepolia-rpc.publicnode.com',
+  'eip155:11155111': 'https://ethereum-sepolia-rpc.publicnode.com',
 };
 
 /** Circle's USDC, per chain. The asset the gate quotes. */
@@ -41,6 +42,14 @@ export const USDC: Record<string, Address> = {
   'eip155:80002': '0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582',
   'eip155:8453': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
   'eip155:84532': '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  /*
+    Sepolia is not a chain the gate quotes; it is where ENSv2 lives. The token
+    here is that deployment's own MockUSDC, which is what name registration is
+    paid in — so a balance read on Sepolia answers the question actually being
+    asked there, which is "can I afford to register a name", not "can I pay for
+    inference".
+  */
+  'eip155:11155111': '0xcBFD80F74375c54E545AF34788Ff465F96F66F05',
 };
 
 export type EvmWalletMaterial = {

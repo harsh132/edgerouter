@@ -21,7 +21,14 @@
  * So the honest statement is the one in the README: this holds what the user
  * chose to put in it, and `sweep` gets it back out.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { generateWallet, openWallet, type LocalWallet, type WalletMaterial } from './local';
@@ -36,9 +43,34 @@ import { HEDERA_TESTNET } from '../pay/hedera';
 export const defaultHome = (): string =>
   process.env.EDGEROUTER_HOME ?? join(homedir(), '.edgerouter');
 
-/** One wallet per network, so testnet play cannot touch a mainnet balance. */
+/**
+ * One wallet per network — which is right for Hedera and wrong for EVM.
+ *
+ * A Hedera account id is issued per network, and the key type differs, so a
+ * testnet wallet and a mainnet one genuinely are different wallets. On EVM they
+ * are not: one secp256k1 key is the same address on every chain, which is a
+ * property this codebase already relies on — the same signer pays on Base
+ * Sepolia and on Base without a line changing. See `evmWalletPath`.
+ */
 export const walletPath = (network: string, home = defaultHome()): string =>
   join(home, `${network.replace(/[^\w.-]/g, '-')}.wallet.json`);
+
+/**
+ * The one EVM wallet, shared by every chain.
+ *
+ * A key per chain would mean funding a separate address for Base Sepolia,
+ * Sepolia, and anywhere else this ever pays or registers a name — three
+ * addresses that are all "your wallet" and none of which is. The chain is a
+ * property of the *request*, not of the key.
+ *
+ * What that gives up is balance isolation: one leaked key is every EVM chain,
+ * mainnet included. That is a real trade and it is the same one already made by
+ * storing the key unencrypted — this is a hot wallet holding what you chose to
+ * put in it, so the protection is the balance, not the filesystem. A mainnet
+ * deployment wanting isolation should set `EDGEROUTER_HOME` per profile rather
+ * than have this file quietly hand out different keys.
+ */
+export const evmWalletPath = (home = defaultHome()): string => join(home, 'evm.wallet.json');
 
 const readMaterial = (path: string): WalletMaterial | null => {
   if (!existsSync(path)) return null;
@@ -151,25 +183,73 @@ export type EvmWalletHandle = {
 };
 
 /**
- * Opens the EVM wallet for a chain, creating one the first time.
+ * Finds a key written before this file kept one wallet per key rather than per
+ * chain.
  *
- * No account id to write back, because an EVM address is the account. The file
- * therefore never changes after it is written, which is one fewer moment at
- * which a key file can be corrupted.
+ * Earlier versions stored `eip155-84532.wallet.json` and friends, and some of
+ * those addresses hold money. Generating a fresh shared wallet beside them
+ * would not lose the funds — the old file is still there — but it would put
+ * them somewhere the plugin no longer looks, which is close enough to losing
+ * them to be worth this function.
+ *
+ * The chain being opened wins, and otherwise the lowest chain id, so the answer
+ * does not depend on directory ordering.
+ */
+const adoptLegacyEvmMaterial = (home: string, network: string): EvmWalletMaterial | null => {
+  const preferred = readEvmMaterial(walletPath(network, home));
+  if (preferred) return preferred;
+
+  if (!existsSync(home)) return null;
+  const legacy = readdirSync(home)
+    .filter((entry) => /^eip155-\d+\.wallet\.json$/.test(entry))
+    .sort((a, b) => Number(/\d+/.exec(a)![0]) - Number(/\d+/.exec(b)![0]));
+
+  for (const entry of legacy) {
+    const material = readEvmMaterial(join(home, entry));
+    if (material) return material;
+  }
+  return null;
+};
+
+/**
+ * Opens the EVM wallet, creating one the first time.
+ *
+ * One key for every EVM chain: the network is applied to the wallet that is
+ * returned, never stored as a property of the key. So the same address pays on
+ * Base Sepolia and registers a name on Sepolia, and funding it once is enough.
+ *
+ * No account id is written back, because an EVM address is the account — the
+ * file never changes after it is written, which is one fewer moment at which a
+ * key file can be corrupted.
  */
 export const loadOrCreateEvmWallet = (
   options: { network: string; home?: string; rpcUrl?: string },
 ): EvmWalletHandle => {
-  const path = walletPath(options.network, options.home ?? defaultHome());
+  const home = options.home ?? defaultHome();
+  const path = evmWalletPath(home);
 
-  const existing = readEvmMaterial(path);
-  const material = existing ?? generateEvmWallet(options.network);
-  if (!existing) write(path, material as unknown as WalletMaterial);
+  const shared = readEvmMaterial(path);
+  const adopted = shared ?? adoptLegacyEvmMaterial(home, options.network);
+  const material = adopted ?? generateEvmWallet(options.network);
+  /*
+    Written whenever it was not already at the shared path — so adopting an old
+    per-chain key copies it here rather than moving it. The original stays put:
+    the point is that the plugin can find the money, not that the previous file
+    stops existing.
+  */
+  if (!shared) write(path, material as unknown as WalletMaterial);
+
+  /*
+    The chain comes from the caller, not from the file. A key adopted from
+    `eip155-84532.wallet.json` says "Base Sepolia" inside it, and using that
+    would silently pay on the wrong chain.
+  */
+  const onNetwork = { ...material, network: options.network };
 
   return {
-    wallet: openEvmWallet(material, options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
+    wallet: openEvmWallet(onNetwork, options.rpcUrl ? { rpcUrl: options.rpcUrl } : {}),
     path,
-    created: existing === null,
+    created: adopted === null,
   };
 };
 

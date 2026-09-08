@@ -10,10 +10,18 @@
  *
  *   bun packages/sdk/wallet-check.ts
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { generateWallet, openWallet, loadOrCreateWallet, walletPath, hbarOf } from './src/index';
+import {
+  generateWallet,
+  openWallet,
+  loadOrCreateWallet,
+  loadOrCreateEvmWallet,
+  walletPath,
+  evmWalletPath,
+  hbarOf,
+} from './src/index';
 
 let failures = 0;
 const check = (condition: boolean, message: string) => {
@@ -154,6 +162,71 @@ try {
   );
 } finally {
   rmSync(home, { recursive: true, force: true });
+}
+
+/* ------------------------------------------------------------------ EVM keys */
+
+section('One EVM key, every EVM chain');
+
+{
+  const home = mkdtempSync(join(tmpdir(), 'edgerouter-evm-'));
+  try {
+    const base = loadOrCreateEvmWallet({ network: 'eip155:84532', home });
+    check(base.created, 'the first open generates a wallet');
+    check(base.path === evmWalletPath(home), 'stored once, not once per chain');
+
+    /*
+      The property the whole change rests on: asking for a different chain is
+      asking the same key a different question. A second address here would mean
+      a second address to fund, which is what this replaced.
+    */
+    const sepolia = loadOrCreateEvmWallet({ network: 'eip155:11155111', home });
+    check(!sepolia.created, 'a second chain does not generate a second wallet');
+    check(
+      sepolia.wallet.address === base.wallet.address,
+      'the same address answers on every EVM chain',
+    );
+    check(sepolia.wallet.network === 'eip155:11155111', 'and it is on the chain that was asked for');
+    check(base.wallet.network === 'eip155:84532', 'while the first handle keeps its own');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+{
+  /*
+    Adoption. An earlier version wrote a key per chain and some of those
+    addresses hold money; a fresh shared wallet beside them would leave the
+    funds somewhere the plugin no longer looks.
+  */
+  const home = mkdtempSync(join(tmpdir(), 'edgerouter-legacy-'));
+  try {
+    const legacy = {
+      privateKey: `0x${'11'.repeat(32)}`,
+      address: '0x9a2E12340000000000000000000000000000BEEF',
+      network: 'eip155:84532',
+    };
+    mkdirSync(home, { recursive: true });
+    writeFileSync(walletPath('eip155:84532', home), JSON.stringify(legacy));
+
+    const adopted = loadOrCreateEvmWallet({ network: 'eip155:11155111', home });
+    check(!adopted.created, 'an existing per-chain key is adopted, not replaced');
+    check(
+      adopted.wallet.exportPrivateKey().toLowerCase() === legacy.privateKey,
+      'and it is the same key, so the money is still reachable',
+    );
+    check(existsSync(evmWalletPath(home)), 'copied to the shared path');
+    check(
+      existsSync(walletPath('eip155:84532', home)),
+      'and the original is left where it was, not moved out from under a backup',
+    );
+    check(
+      adopted.wallet.network === 'eip155:11155111',
+      'the chain comes from the caller, never from the adopted file',
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 }
 
 console.log(failures === 0 ? '\nAll checks pass.' : `\n${failures} FAILED.`);
