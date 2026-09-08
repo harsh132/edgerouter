@@ -61,7 +61,7 @@ const adapter = new EdgerouterAdapter({
     network: 'hedera:testnet',
     defaultContextWindow: 128_000,
   }),
-  signer: signerFor,
+  signer: async () => signerFor(),
   onPaid: (paid) => paidCalls.push(paid),
 });
 

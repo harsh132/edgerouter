@@ -66,6 +66,8 @@ type Section = {
   depositAmount?: string;
 
   delegation?: boolean;
+  /** Whether each chat spends its own allowance rather than the shared wallet. */
+  perSessionBudgets?: boolean;
   delegationUrl?: string;
   delegationStatus?: string;
   /** The allowance tree as JSON, rendered by the Node half. */
@@ -550,6 +552,7 @@ const Delegation = ({
   tree,
   capability,
   network,
+  perSession,
 }: {
   scope: { set(field: string, value: unknown): Promise<void> };
   enabled: boolean;
@@ -558,6 +561,7 @@ const Delegation = ({
   tree: string;
   capability: string;
   network: string;
+  perSession: boolean;
 }): ReactNode => {
   const [label, setLabel] = useState('');
   const [amount, setAmount] = useState('');
@@ -674,6 +678,37 @@ const Delegation = ({
           ),
         ]
       : []),
+
+    /*
+      The mode that makes this a team rather than a shared card. With it on,
+      every chat mints its own allowance on its first paid call, so the tree
+      below fills itself and each row is a chat you can cut off individually.
+    */
+    h('div', { key: 'auto', style: { ...style.card, gap: '8px' } }, [
+      h('div', { key: 'l', style: style.label }, 'Per-chat budgets'),
+      h(
+        'p',
+        { key: 'n', style: style.note },
+        perSession
+          ? 'Each chat mints its own allowance the first time it pays, and spends ' +
+              'only that. Revoking one stops that chat and nothing else.'
+          : 'Every chat shares the wallet. Turn this on and each one gets its own ' +
+              'budget instead — visible below, and revocable one at a time.',
+      ),
+      h(
+        'div',
+        { key: 'r', style: style.row },
+        h(
+          'button',
+          {
+            type: 'button',
+            style: style.button,
+            onClick: () => void scope.set('perSessionBudgets', !perSession),
+          },
+          perSession ? 'Share the wallet again' : 'Give each chat its own budget',
+        ),
+      ),
+    ]),
 
     h('div', { key: 'mk', style: style.label }, 'New allowance'),
     h('div', { key: 'mf', style: style.row }, [
@@ -842,6 +877,7 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
       tree: section.delegationTree ?? '',
       capability: section.delegateCapability ?? '',
       network: section.network ?? 'hedera:testnet',
+      perSession: Boolean(section.perSessionBudgets),
     }),
 
     h(Naming, {

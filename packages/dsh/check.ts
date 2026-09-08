@@ -295,7 +295,7 @@ const adapterWith = (
       network: 'hedera:testnet',
       defaultContextWindow: 128_000,
     }),
-    signer: () => signer,
+    signer: async () => signer,
     onPaid: (p) => paid.push(p),
     fetch: server.handler,
   });
@@ -363,7 +363,7 @@ await throws('AUTH', 'a 401 from the gate is an auth failure', async () => {
       maxAmount: 1n,
       defaultContextWindow: 1,
     }),
-    signer: () => recordingSigner(),
+    signer: async () => recordingSigner(),
     fetch: broken,
   });
   check(
@@ -637,6 +637,65 @@ section('Reporting the wallet address');
     'an over-long EVM address is refused',
   );
   check(!isWithdrawDestination('0.0', HEDERA), 'a malformed account id is refused');
+}
+
+/* ------------------------------------------------- one signer per session */
+
+{
+  /*
+    With per-session budgets on, each chat pays through its own allowance. The
+    property that matters is not that the right signer is chosen — it is that a
+    chat which cannot be given one still pays. Accounting for spending must not
+    become a new way for spending to fail.
+
+    The adapter is what decides, so the adapter is what is asked, with a signer
+    accessor that records which session it was called for.
+  */
+  const asked: (string | undefined)[] = [];
+  const wallet = recordingSigner();
+  const server = gate('1000');
+  const perSession = new Map([['chat-a', recordingSigner()]]);
+
+  const adapter = new EdgerouterAdapter({
+    connection: () => ({
+      baseURL: 'https://gate.example',
+      capability: '',
+      maxAmount: 1_000_000n,
+      network: HEDERA,
+      defaultContextWindow: 128_000,
+    }),
+    signer: async (sessionId) => {
+      asked.push(sessionId);
+      return (sessionId ? perSession.get(sessionId) : undefined) ?? wallet;
+    },
+    fetch: server.handler,
+  });
+
+  // The same request shape every other check uses, plus a session id.
+  const drain = async (sessionId?: string) => {
+    const options = { ...request, ...(sessionId ? { sessionId } : {}) };
+    for await (const _ of adapter.stream(options as GenerateOptions)) void _;
+  };
+
+  await drain('chat-a');
+  check(asked.at(-1) === 'chat-a', 'the adapter asks for a signer by session');
+  check(
+    perSession.get('chat-a')!.calls === 1,
+    'and the session with an allowance signs with it',
+  );
+  check(wallet.calls === 0, 'without touching the wallet');
+
+  /*
+    The fallback. A chat with no allowance of its own is the ordinary case —
+    the feature off, delegation not running, or a mint that failed — and it must
+    pay exactly as before.
+  */
+  await drain('chat-b');
+  check(wallet.calls === 1, 'a session without one falls back to the wallet');
+
+  await drain();
+  check(asked.at(-1) === undefined, 'a call with no session asks for no session');
+  check(wallet.calls === 2, 'and pays from the wallet too');
 }
 
 console.log(failures === 0 ? '\nAll checks pass.' : `\n${failures} FAILED.`);

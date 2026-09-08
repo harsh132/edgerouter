@@ -63,7 +63,17 @@ export type EdgerouterAdapterOptions = {
     defaultContextWindow: number;
   };
   /** Built once the payment credentials resolve; absent means unpaid calls only. */
-  signer: () => PaymentSigner | undefined;
+  /**
+   * The signer for one call, chosen by which session is making it.
+   *
+   * Asynchronous and per session, because a session may not have a signer
+   * *yet*: with per-session budgets on, the first call from a new chat mints
+   * that chat an allowance and connects to it, which is a round trip. Sessions
+   * that have no allowance — and every session, when the feature is off — get
+   * the wallet's own signer, so this never becomes a way for payment to stop
+   * working.
+   */
+  signer: (sessionId?: string) => Promise<PaymentSigner | undefined>;
   /**
    * Why there is no signer, when there is none.
    *
@@ -144,7 +154,9 @@ export class EdgerouterAdapter extends LlmAdapter {
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const connection = this.options.connection();
-    const signer = this.options.signer();
+    const signer = await this.options.signer(
+      options.sessionId ? String(options.sessionId) : undefined,
+    );
     if (!signer) {
       const reason =
         this.options.unavailableReason?.() ??

@@ -176,6 +176,21 @@ export interface Config {
   delegation?: boolean;
   /** How much of the wallet delegation may hand out, smallest unit. */
   delegationBudget?: string;
+  /**
+   * Whether each chat spends its own allowance rather than the shared wallet.
+   *
+   * With this on, the first paid call from a chat mints that chat a budget out
+   * of the delegation tree and pays through it. The chat becomes a teammate
+   * with an expense account: you can see what it has spent, and cut it off
+   * without touching anything else.
+   *
+   * Off by default, and it needs delegation running. A chat that cannot be
+   * given an allowance falls back to the wallet rather than failing to pay —
+   * this is a way to account for spending, not a new way for it to break.
+   */
+  perSessionBudgets?: boolean;
+  /** What each chat is granted on its first paid call, smallest unit. */
+  sessionBudget?: string;
   /** Reported: where sub-agents point, and what the tree currently holds. */
   delegationUrl?: string;
   delegationStatus?: string;
@@ -246,6 +261,11 @@ export const Config: z<Config> = z.object({
     .default(false)
     .description('Hand out spending allowances to sub-agents over loopback.'),
   delegationBudget: z.string().description('What delegation may hand out, smallest unit.'),
+  perSessionBudgets: z
+    .boolean()
+    .default(false)
+    .description('Give each chat its own allowance instead of sharing the wallet.'),
+  sessionBudget: z.string().description('What each chat is granted, smallest unit.'),
   delegationUrl: z.string().description('Reported by the plugin.'),
   delegationStatus: z.string().description('Reported by the plugin.'),
   delegationTree: z.string().description('Reported by the plugin.'),
@@ -648,6 +668,12 @@ export function apply(ctx: Context, config: Config): void {
       if (delegation) {
         await delegation.stop();
         delegation = null;
+        /*
+          Every per-chat signer talks to that authority over loopback, so they
+          are now pointing at a closed socket. Dropped rather than left to fail
+          one call at a time.
+        */
+        sessionSigners.clear();
         ctx.logger.info('llm-edgerouter: delegation stopped');
       }
       reportTree();
@@ -1006,9 +1032,91 @@ export function apply(ctx: Context, config: Config): void {
     );
   };
 
+  /**
+   * One signer per chat, when chats have their own budgets.
+   *
+   * The entry is the promise, not the signer, and that is deliberate: a chat
+   * that fires three calls at once must mint one allowance, not three. Storing
+   * the in-flight promise makes the second and third callers wait for the first
+   * rather than race it.
+   */
+  const sessionSigners = new Map<string, Promise<PaymentSigner | undefined>>();
+
+  /**
+   * Mints a chat its own allowance and connects to it.
+   *
+   * Returns undefined rather than throwing on every failure path, because the
+   * caller falls back to the wallet. A chat that cannot be given a budget
+   * should still be able to work — this feature accounts for spending, it does
+   * not gate it.
+   */
+  const openSessionSigner = async (sessionId: string): Promise<PaymentSigner | undefined> => {
+    const now = current();
+    if (!delegation) return undefined;
+
+    try {
+      const network = now.network ?? DEFAULT_NETWORK;
+      const amountMinor = now.sessionBudget?.trim()
+        ? BigInt(now.sessionBudget.trim())
+        : maxAmount() * 5n;
+
+      /*
+        The allowance is named after the chat, and when ENS naming is on it is
+        named with the chat's *ENS name* — so the node the authority charges and
+        the name the guard resolves are one string, and revoking the name stops
+        the spending.
+      */
+      const { chatLabelFor } = await import('../../ens/src/index');
+      const label = chatLabelFor(sessionId);
+      const child = now.ensNames && now.ensName ? `${label}.${now.ensName}` : label;
+
+      const capability = await delegation.mint({ child, amountMinor, hours: 24 });
+      const connected = await connectAuthority({
+        url: delegation.url,
+        capability,
+        resourceUrl: now.baseURL ?? DEFAULT_BASE_URL,
+      });
+
+      reportTree();
+      ctx.logger.info(
+        `llm-edgerouter: ${child} has its own budget of ${formatAmount(network, amountMinor)}`,
+      );
+      return connected.signer;
+    } catch (error) {
+      /*
+        Logged once per chat, not per call: the map holds this promise, so a
+        failure is remembered as "no allowance" and the wallet is used from
+        here on rather than retried on every message.
+      */
+      ctx.logger.warn(
+        `llm-edgerouter: could not give this chat its own budget — ${(error as Error).message}`,
+      );
+      return undefined;
+    }
+  };
+
+  /**
+   * The signer for one call.
+   *
+   * Falls through to the wallet in every case where a chat has no allowance —
+   * the feature is off, delegation is not running, the mint failed, or the call
+   * carries no session at all. Payment working is not conditional on
+   * accounting working.
+   */
+  const signerFor = async (sessionId?: string): Promise<PaymentSigner | undefined> => {
+    if (!sessionId || !current().perSessionBudgets) return signer;
+
+    let pending = sessionSigners.get(sessionId);
+    if (!pending) {
+      pending = openSessionSigner(sessionId);
+      sessionSigners.set(sessionId, pending);
+    }
+    return (await pending) ?? signer;
+  };
+
   const adapter = new EdgerouterAdapter({
     connection,
-    signer: () => signer,
+    signer: signerFor,
     unavailableReason: () => unavailable,
     onPaid,
   });
