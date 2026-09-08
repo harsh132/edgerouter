@@ -30,6 +30,7 @@ import { createElement as h, useSyncExternalStore, useState, type ReactNode } fr
 import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client';
 import type {} from '@deepseek-ai/dsh-client-runtime/client';
+import { registerSidebarTab } from './sidebar';
 
 export const name = 'llm-edgerouter-settings';
 export const inject = ['slots', 'settingsScope'];
@@ -726,6 +727,13 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
 };
 
 export function apply(ctx: Context): void {
+  /*
+    A second surface, and the only one that knows which conversation is being
+    looked at. Optional: it registers itself only if the sidebar plugin is
+    installed, and the settings page below is what always works.
+  */
+  registerSidebarTab(ctx);
+
   /*
     `inject` on the slot rather than a hard dependency: the settings shell is
     one composition among several, and a profile without it should lose this

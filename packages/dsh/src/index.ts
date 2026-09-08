@@ -152,9 +152,16 @@ export interface Config {
   ensName?: string;
   /** Reported, not configured: what the naming attempt did or why it did not. */
   ensStatus?: string;
-  /** Reported: the most recent chat to be named, and how it went. */
+  /** Reported: the most recent chat to be named. */
   ensChatName?: string;
-  ensChatStatus?: string;
+  /**
+   * Reported: every chat this session knows about, as JSON.
+   *
+   * Keyed by session id, so the sidebar tab can answer "what is *this* chat
+   * called, and what has it cost" — the question a global settings page
+   * cannot.
+   */
+  ensChats?: string;
 
   /**
    * Whether this session hands out allowances to sub-agents.
@@ -220,7 +227,7 @@ export const Config: z<Config> = z.object({
   ensName: z.string().description('Reported by the plugin.'),
   ensStatus: z.string().description('Reported by the plugin.'),
   ensChatName: z.string().description('Reported by the plugin.'),
-  ensChatStatus: z.string().description('Reported by the plugin.'),
+  ensChats: z.string().description('Reported by the plugin.'),
 
   delegation: z
     .boolean()
@@ -526,6 +533,37 @@ export function apply(ctx: Context, config: Config): void {
   const chatReporter = createReporter();
 
   /**
+   * What each chat is called and what it has spent.
+   *
+   * Published for the sidebar tab, which is the one surface that knows *which*
+   * chat is being looked at. Settings are global, so the page can only ever
+   * show the latest of anything; a per-chat panel asks a different question —
+   * "what has this conversation cost me" — and can only answer it from a map.
+   *
+   * Keyed by session id and rendered on this side, because the browser half
+   * cannot hash a session id into a label without pulling a chain library into
+   * a settings page.
+   */
+  type ChatLedger = { name: string; spentMinor: string; spent: string; calls: number };
+  const chats = new Map<string, ChatLedger>();
+  /** Enough to cover a working day; a settings document is not a database. */
+  const MAX_CHATS = 24;
+
+  const chatEntry = (sessionId: string): ChatLedger => {
+    const found = chats.get(sessionId);
+    if (found) return found;
+    const fresh: ChatLedger = { name: '', spentMinor: '0', spent: '', calls: 0 };
+    chats.set(sessionId, fresh);
+    // Oldest out first. `Map` iterates in insertion order, so the first key is
+    // the least recently *created* chat — which is the one worth forgetting.
+    while (chats.size > MAX_CHATS) chats.delete(chats.keys().next().value!);
+    return fresh;
+  };
+
+  const publishChats = (latest: string) =>
+    chatReporter.publish(latest, JSON.stringify(Object.fromEntries(chats)));
+
+  /**
    * Gives a chat its own name, the first time it spends.
    *
    * On first payment rather than on first message, deliberately. Naming costs
@@ -554,7 +592,8 @@ export function apply(ctx: Context, config: Config): void {
           owner: ensSigner.address,
         },
       );
-      chatReporter.publish(named.name, named.minted ? 'named on first payment' : 'already named');
+      chatEntry(sessionId).name = named.name;
+      publishChats(named.name);
       if (named.minted) ctx.logger.info(`llm-edgerouter: this chat is ${named.name}`);
     } catch (error) {
       /*
@@ -833,6 +872,21 @@ export function apply(ctx: Context, config: Config): void {
   const onPaid = (paid: Paid) => {
     spent += paid.amount;
     calls += 1;
+
+    if (paid.sessionId) {
+      /*
+        Recorded whether or not naming is on. A chat's cost is worth knowing
+        even when nobody has paid to give it a name, and tying the two together
+        would hide the cheaper fact behind the expensive one.
+      */
+      const entry = chatEntry(paid.sessionId);
+      const total = BigInt(entry.spentMinor) + paid.amount;
+      entry.spentMinor = total.toString();
+      entry.spent = formatAmount(paid.network, total);
+      entry.calls += 1;
+      publishChats(entry.name);
+    }
+
     // Fire and forget: a name is worth having, and never worth delaying a
     // response the user has already paid for.
     void nameChat(paid.sessionId);
@@ -1204,9 +1258,9 @@ export function apply(ctx: Context, config: Config): void {
       }
     };
 
-    chatReporter.attach((ensChatName, ensChatStatus) => {
+    chatReporter.attach((ensChatName, ensChats) => {
       void settingsCtx.settings
-        .update(NS, { ensChatName, ensChatStatus })
+        .update(NS, { ensChatName, ensChats })
         .catch((error: unknown) =>
           ctx.logger.warn(
             `llm-edgerouter: could not report the chat name: ${(error as Error).message}`,
