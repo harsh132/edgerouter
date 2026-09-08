@@ -12,3 +12,5 @@ export * from './client';
 export * from './abi';
 export * from './register';
 export * from './wallet';
+export * from './deploy';
+export * from './records';
