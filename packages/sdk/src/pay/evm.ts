@@ -38,6 +38,22 @@ import type { PaymentRequirements, PaymentSigner } from './types';
 export const POLYGON_AMOY = 'eip155:80002';
 export const BASE_SEPOLIA = 'eip155:84532';
 export const BASE = 'eip155:8453';
+/**
+ * Circle's Arc, testnet.
+ *
+ * Worth a note because it is the one EVM chain here where the gas token and the
+ * payment asset are the same thing: USDC is native, and the ERC-20 at
+ * `0x3600…0000` is an interface over it rather than a separate contract. Native
+ * balances are 18 decimals, the ERC-20 view is 6, and both describe one
+ * balance — so "can pay but cannot afford gas", which is the normal EVM
+ * failure, cannot arise here.
+ *
+ * EIP-3009 is implemented: `authorizationState` answers and the contract
+ * reports `name` "USDC" and `version` "2", which is the EIP-712 domain the
+ * signer needs. So the signer works unchanged — see the note above about one
+ * signer and many chains.
+ */
+export const ARC_TESTNET = 'eip155:5042002';
 
 /** USDC and every other six-decimal stablecoin. Here for symmetry with HBAR. */
 export const USDC_DECIMALS = 6;

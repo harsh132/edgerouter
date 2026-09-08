@@ -30,11 +30,12 @@ import type { PaymentSigner } from '../pay/types';
  * this — which is why a wrong or missing RPC degrades the wallet's *display*
  * and never its ability to pay.
  */
-const RPC: Record<string, string> = {
+export const RPC_URLS: Record<string, string> = {
   'eip155:80002': 'https://polygon-amoy-bor-rpc.publicnode.com',
   'eip155:8453': 'https://base-rpc.publicnode.com',
   'eip155:84532': 'https://base-sepolia-rpc.publicnode.com',
   'eip155:11155111': 'https://ethereum-sepolia-rpc.publicnode.com',
+  'eip155:5042002': 'https://rpc.testnet.arc.network',
 };
 
 /** Circle's USDC, per chain. The asset the gate quotes. */
@@ -50,6 +51,14 @@ export const USDC: Record<string, Address> = {
     inference".
   */
   'eip155:11155111': '0xcBFD80F74375c54E545AF34788Ff465F96F66F05',
+  /*
+    Arc's USDC is a precompile, and it is also the chain's gas token. The two
+    balances a wallet reports here — `tokenMinor` from this interface and
+    `nativeWei` from the chain — are views over the same money at different
+    scales, 6 decimals and 18. That makes `sweep`'s usual warning inapplicable:
+    a wallet that can pay on Arc can always afford to leave.
+  */
+  'eip155:5042002': '0x3600000000000000000000000000000000000000',
 };
 
 export type EvmWalletMaterial = {
@@ -99,7 +108,7 @@ export const openEvmWallet = (
   options: { rpcUrl?: string; asset?: Address } = {},
 ): EvmWallet => {
   const network = material.network;
-  const rpcUrl = options.rpcUrl ?? RPC[network];
+  const rpcUrl = options.rpcUrl ?? RPC_URLS[network];
   const asset = options.asset ?? USDC[network];
   if (!asset) throw new Error(`no default asset known for ${network}; pass one explicitly`);
 
