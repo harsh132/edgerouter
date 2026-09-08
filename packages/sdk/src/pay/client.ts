@@ -150,7 +150,24 @@ export const payAndFetch = async (url: string, options: PayOptions): Promise<Pay
   const network = options.network ?? options.signer.network;
   const init = options.init ?? {};
 
-  const first = await doFetch(url, init);
+  /*
+    The network is asked for, not assumed.
+
+    A gate that accepts several networks quotes exactly one per request and
+    picks its own default when nobody says otherwise — so a client configured
+    for Arc that sends nothing gets a Hedera quote, refuses it as unpayable, and
+    reports that the server offers the wrong thing. The server was answering the
+    question it was asked; the question was never posed.
+
+    A header rather than a query parameter, so the caller's URL is handed back
+    unchanged. The gate reads either.
+  */
+  const asking = {
+    ...init,
+    headers: { ...((init.headers ?? {}) as Record<string, string>), 'X-Payment-Network': network },
+  };
+
+  const first = await doFetch(url, asking);
   if (first.status !== 402) {
     return {
       response: first,
@@ -187,10 +204,15 @@ export const payAndFetch = async (url: string, options: PayOptions): Promise<Pay
   };
 
   const paidStarted = Date.now();
+  /*
+    The same network header goes back with the payment. Without it the gate
+    re-quotes its default and the terms it checks the signature against are not
+    the terms that were signed — a mismatch, reported as a refused payment.
+  */
   const second = await doFetch(url, {
-    ...init,
+    ...asking,
     headers: {
-      ...(init.headers as Record<string, string> | undefined),
+      ...asking.headers,
       [HEADER.signature]: base64(JSON.stringify(payment)),
     },
   });

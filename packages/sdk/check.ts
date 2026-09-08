@@ -191,6 +191,23 @@ const gate = (options: { settlement?: unknown } = {}) => {
     'the first request carries no payment',
   );
 
+  /*
+    Both requests say which network they want. Without this the gate quotes its
+    own default, a client configured for another chain refuses that quote as
+    unpayable, and the error reads as the server offering the wrong thing —
+    when the question was simply never asked. The paid retry carries it for a
+    sharper reason: re-quoting the default there would have the gate check the
+    signature against terms nobody signed.
+  */
+  check(
+    server.calls[0]?.headers['X-Payment-Network'] === signer.network,
+    'the first request asks for the signer’s network',
+  );
+  check(
+    server.calls[1]?.headers['X-Payment-Network'] === signer.network,
+    'and the paid request asks for the same one',
+  );
+
   const sent = server.calls[1]?.headers['PAYMENT-SIGNATURE'];
   const decoded = sent ? JSON.parse(unbase64(sent)!) : null;
   check(decoded?.x402Version === 2, 'the payload declares x402 v2');
