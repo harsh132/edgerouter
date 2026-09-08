@@ -55,7 +55,7 @@ export type PaymentRequirements = {
   asset: string;
   payTo: string;
   maxTimeoutSeconds: number;
-  extra: EvmExtra | HederaExtra;
+  extra: EvmExtra | HederaExtra | GatewayExtra;
 };
 
 /** EIP-712 domain, so the client can build an EIP-3009 authorization. */
@@ -63,6 +63,21 @@ export type EvmExtra = {
   assetTransferMethod: 'eip3009' | 'permit2' | 'erc7710';
   name?: string;
   version?: string;
+};
+
+/**
+ * What a Circle Gateway payment is signed against.
+ *
+ * `verifyingContract` is the GatewayWallet, not the token — that single field
+ * is the difference between a signature Gateway accepts and one it does not,
+ * and it is why this cannot be folded into `EvmExtra` with an optional flag.
+ * `domain` is Circle's own chain numbering, which is not the chain id.
+ */
+export type GatewayExtra = {
+  name: string;
+  version: string;
+  verifyingContract: string;
+  domain: number;
 };
 
 /**
@@ -135,14 +150,24 @@ export const requirements = (params: {
   const accepted: PaymentRequirements =
     params.network.kind === 'hedera'
       ? { ...common, extra: { feePayer: params.network.feePayer } }
-      : {
-          ...common,
-          extra: {
-            assetTransferMethod: 'eip3009' as const,
-            name: params.network.assetName,
-            version: params.network.assetVersion,
-          },
-        };
+      : params.network.kind === 'gateway'
+        ? {
+            ...common,
+            extra: {
+              name: params.network.assetName,
+              version: params.network.assetVersion,
+              verifyingContract: params.network.gatewayWallet,
+              domain: params.network.gatewayDomain,
+            },
+          }
+        : {
+            ...common,
+            extra: {
+              assetTransferMethod: 'eip3009' as const,
+              name: params.network.assetName,
+              version: params.network.assetVersion,
+            },
+          };
 
   return {
     x402Version: X402_VERSION,
@@ -327,7 +352,22 @@ const facilitatorCall = async (
  */
 const facilitatorBody = (payment: PaymentPayload, required: PaymentRequired) => ({
   x402Version: X402_VERSION,
-  paymentPayload: payment,
+  /*
+    Gateway wants `resource` and `accepted` inside the payload, and answers 400
+    without them — they are optional in Circle's published types and required
+    by the API. `accepted` is the entry the buyer agreed to, which Gateway
+    re-derives the payment from rather than trusting the payload alone.
+
+    Sent to every facilitator rather than only to Gateway: both fields are
+    already in the 402 this gate issued, so they are true everywhere, and a
+    facilitator that does not want them ignores them. The alternative is a
+    branch on network kind inside the one function that should not care.
+  */
+  paymentPayload: {
+    ...payment,
+    resource: required.resource,
+    accepted: quoteOf(required),
+  },
   paymentRequirements: quoteOf(required),
 });
 

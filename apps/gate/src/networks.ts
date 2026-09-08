@@ -59,6 +59,49 @@ export type NetworkConfig =
       facilitatorUrl?: string;
     }
   | {
+      /**
+       * An EVM chain paid through Circle's Gateway rather than by a direct
+       * ERC-20 transfer.
+       *
+       * Separate from `evm` because almost everything about the payment is
+       * different in ways the client cannot infer. The signature is bound to
+       * the **GatewayWallet** contract rather than to the token, so a
+       * signature valid under `evm` is rejected here and vice versa; the buyer
+       * must have deposited into Gateway beforehand, because Gateway pays from
+       * a virtual balance rather than from the wallet; and settlement returns a
+       * batch id rather than a transaction hash, because payments are
+       * aggregated and the chain sees them later.
+       *
+       * Modelling it as `evm` with a flag would put all three of those
+       * differences behind one boolean and leave every reader to discover them
+       * separately.
+       */
+      kind: 'gateway';
+      /** CAIP-2 / EIP-155. Arc testnet is `eip155:5042002`. */
+      id: string;
+      /** The token address, still — it names what is being paid, not what signs. */
+      asset: string;
+      payTo: string;
+      /** The GatewayWallet contract. This is the EIP-712 `verifyingContract`. */
+      gatewayWallet: string;
+      /** Circle's own chain numbering, distinct from the chain id. Arc is 26. */
+      gatewayDomain: number;
+      /** EIP-712 domain name and version for the batched authorization. */
+      assetName: string;
+      assetVersion: string;
+      unitsPerUsdMinor: bigint;
+      maxTimeoutSeconds: number;
+      /**
+       * Gateway's x402 endpoints, e.g.
+       * `https://gateway-api-testnet.circle.com/v1/x402`.
+       *
+       * Effectively required: no general facilitator settles a Gateway
+       * payment, so falling back to the gate's default would offer a quote
+       * nothing can settle.
+       */
+      facilitatorUrl?: string;
+    }
+  | {
       kind: 'hedera';
       /** `hedera:testnet` or `hedera:mainnet`. */
       id: string;
@@ -185,6 +228,44 @@ const narrow = (entry: unknown): NetworkConfig | null => {
       unitsPerUsdMinor: scale ?? 1n,
       maxTimeoutSeconds: timeout ?? 180,
       ...(facilitatorUrl ? { facilitatorUrl } : {}),
+    };
+  }
+
+  if (e.kind === 'gateway') {
+    if (!/^eip155:\d+$/.test(id)) return null;
+    if (!isEvmAddress(asset) || !isEvmAddress(payTo)) return null;
+
+    /*
+      The GatewayWallet and Circle's domain number are both required, and
+      neither is guessable. Defaulting the contract would bind signatures to the
+      wrong address, and defaulting the domain would settle against a different
+      chain's ledger — both fail in ways that look like a client bug.
+    */
+    const gatewayWallet = str(e.gatewayWallet);
+    if (!gatewayWallet || !isEvmAddress(gatewayWallet)) return null;
+    const gatewayDomain = typeof e.gatewayDomain === 'number' ? e.gatewayDomain : null;
+    if (gatewayDomain === null || !Number.isInteger(gatewayDomain) || gatewayDomain < 0) return null;
+
+    /*
+      No general facilitator settles a Gateway payment, so a network without its
+      own facilitator would quote something the gate's default cannot settle.
+      Refused rather than inherited.
+    */
+    if (!facilitatorUrl) return null;
+
+    return {
+      kind: 'gateway',
+      id,
+      asset,
+      payTo,
+      gatewayWallet,
+      gatewayDomain,
+      // Circle's batched authorization, not the token's own domain.
+      assetName: str(e.assetName) ?? 'GatewayWalletBatched',
+      assetVersion: str(e.assetVersion) ?? '1',
+      unitsPerUsdMinor: scale ?? 1n,
+      maxTimeoutSeconds: timeout ?? 60,
+      facilitatorUrl,
     };
   }
 

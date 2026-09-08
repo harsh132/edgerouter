@@ -113,6 +113,24 @@ for (const entry of declared) {
       network.unitsPerUsdMinor === 1n,
       `${id} scales 1:1 from USD minor, as a six-decimal stablecoin does`,
     );
+  } else if (network.kind === 'gateway') {
+    check(isEvmAddress(network.payTo), `${id} payTo is a well-formed EVM address`);
+    check(isEvmAddress(network.asset), `${id} asset is a well-formed EVM address`);
+    /*
+      The two facts a Gateway quote cannot be built without. The wallet address
+      is what signatures bind to, and the domain is which ledger settles them —
+      a wrong value in either produces a signature that verifies against nothing
+      and reports as a malformed payment.
+    */
+    check(
+      isEvmAddress(network.gatewayWallet),
+      `${id} names the GatewayWallet its signatures bind to`,
+    );
+    check(Number.isInteger(network.gatewayDomain), `${id} declares Circle's domain number`);
+    check(
+      Boolean(network.facilitatorUrl),
+      `${id} has its own facilitator; no general one settles a Gateway payment`,
+    );
   } else {
     check(isEntityId(network.payTo), `${id} payTo is a Hedera entity id`);
     check(isEntityId(network.feePayer), `${id} declares a fee payer`);

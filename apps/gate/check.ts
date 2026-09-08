@@ -402,5 +402,70 @@ for (const bad of ['0', '-5', 'many', '1.5']) {
   check(parsed.size === 0, `unitsPerUsdMinor of "${bad}" is refused`);
 }
 
+/* ------------------------------------------------------------ gateway kind */
+
+{
+  const base = {
+    kind: 'gateway',
+    id: 'eip155:5042002',
+    asset: '0x3600000000000000000000000000000000000000',
+    payTo: '0x3f870ECEEE0EcE3a54254C1D364230ABd14aa2d3',
+    gatewayWallet: '0x0077777d7EBA4688BDeF3E311b846F25870A19B9',
+    gatewayDomain: 26,
+    facilitatorUrl: 'https://gateway-api-testnet.circle.com/v1/x402',
+  };
+  const parse = (over: Record<string, unknown> = {}) =>
+    parseNetworks(JSON.stringify([{ ...base, ...over }])).get('eip155:5042002');
+
+  const arc = parse();
+  check(arc?.kind === 'gateway', 'a Gateway network parses');
+  check(
+    arc?.kind === 'gateway' && arc.gatewayWallet === base.gatewayWallet,
+    'and keeps the wallet its signatures bind to',
+  );
+  check(
+    arc?.kind === 'gateway' && arc.assetName === 'GatewayWalletBatched',
+    'defaulting to the batched domain rather than the token’s own',
+  );
+
+  /*
+    Each of these produces a quote that looks fine and settles against nothing:
+    a missing wallet binds signatures to undefined, a missing domain settles on
+    another chain's ledger, and a missing facilitator falls back to one that has
+    never heard of Gateway.
+  */
+  check(parse({ gatewayWallet: undefined }) === undefined, 'no GatewayWallet, no network');
+  check(parse({ gatewayWallet: 'not-an-address' }) === undefined, 'a malformed wallet is refused');
+  check(parse({ gatewayDomain: undefined }) === undefined, 'no domain, no network');
+  check(parse({ gatewayDomain: 1.5 }) === undefined, 'a fractional domain is refused');
+  check(
+    parse({ facilitatorUrl: undefined }) === undefined,
+    'a Gateway network without its own facilitator is refused',
+  );
+
+  /*
+    The quote itself. `extra.verifyingContract` is the whole difference between
+    a signature Gateway accepts and one it does not, so it is checked rather
+    than assumed.
+  */
+  const required = requirements({
+    request: new Request('https://gate.example/v1/chat/completions'),
+    network: arc!,
+    amountMinor: 10_000n,
+    description: 'inference',
+  });
+  const quote = quoteOf(required);
+  check(quote.network === 'eip155:5042002', 'the quote names Arc');
+  check(
+    (quote.extra as { verifyingContract?: string }).verifyingContract === base.gatewayWallet,
+    'and binds the signature to the GatewayWallet, not the token',
+  );
+  check(
+    (quote.extra as { domain?: number }).domain === 26,
+    'and carries Circle’s domain number',
+  );
+  check(quote.asset === base.asset, 'while still naming the token being paid');
+}
+
 console.log(failures === 0 ? '\nAll checks pass.' : `\n${failures} FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
