@@ -104,6 +104,77 @@ const destination = (network: string | undefined) =>
         valid: (value: string) => /^\d+\.\d+\.\d+$/.test(value),
       };
 
+/**
+ * The chains this plugin can pay on.
+ *
+ * Listed rather than discovered, because there is nothing to discover from: a
+ * 402 quotes one network, and the gate has no endpoint that enumerates the
+ * rest. So this is a claim about what the *plugin* can sign for, which is the
+ * honest framing anyway — a chain the gate accepts and this plugin cannot sign
+ * is not a chain the user can pick.
+ *
+ * `settles` names the facilitator because it is the part people do not expect.
+ * The same wallet pays on all three, and three different services move the
+ * money; that is the design, and it is invisible unless said.
+ */
+const NETWORKS: { id: string; label: string; asset: string; settles: string }[] = [
+  { id: 'hedera:testnet', label: 'Hedera testnet', asset: 'HBAR', settles: 'Blocky402' },
+  { id: 'eip155:84532', label: 'Base Sepolia', asset: 'USDC', settles: 'x402.org' },
+  { id: 'eip155:5042002', label: 'Arc testnet', asset: 'USDC', settles: 'Circle Gateway' },
+];
+
+/**
+ * Picks the chain to pay on.
+ *
+ * A real switch, not a display: changing it tears down the payment source and
+ * builds a new one, because a wallet, a poll and possibly a connection to
+ * another process cannot be re-pointed at a different chain. The funding state
+ * changes with it — the same key is funded differently on each — which is why
+ * this sits directly above the address rather than in a corner.
+ */
+const NetworkPicker = ({
+  scope,
+  current,
+}: {
+  scope: { set(field: string, value: unknown): Promise<void> };
+  current: string;
+}): ReactNode =>
+  h('div', { style: style.card }, [
+    h('div', { key: 'l', style: style.label }, 'Paying on'),
+    h(
+      'div',
+      { key: 'r', style: style.row },
+      NETWORKS.map((network) => {
+        const active = network.id === current;
+        return h(
+          'button',
+          {
+            key: network.id,
+            type: 'button',
+            style: active
+              ? { ...style.button, borderColor: '#3fb950', color: '#3fb950' }
+              : style.button,
+            onClick: () => {
+              if (!active) void scope.set('network', network.id);
+            },
+          },
+          network.label,
+        );
+      }),
+    ),
+    h(
+      'p',
+      { key: 'n', style: style.note },
+      (() => {
+        const chosen = NETWORKS.find((network) => network.id === current);
+        return chosen
+          ? `Paying in ${chosen.asset}, settled through ${chosen.settles}. ` +
+              'The same wallet pays on every one of these.'
+          : `Configured for ${current}, which this page does not know about.`;
+      })(),
+    ),
+  ]);
+
 const FAUCETS: Record<string, { label: string; url: string; asset: string }> = {
   hedera: { label: 'Hedera portal faucet', url: 'https://portal.hedera.com/faucet', asset: 'testnet HBAR' },
   eip155: { label: "Circle's faucet", url: 'https://faucet.circle.com', asset: 'testnet USDC' },
@@ -711,6 +782,7 @@ const Page = ({ ctx }: { ctx: Context }): ReactNode => {
 
   return h('div', { style: style.page }, [
     heading,
+    h(NetworkPicker, { key: 'picker', scope, current: section.network ?? 'hedera:testnet' }),
     h('div', { key: 'card', style: style.card }, [
       h('div', { key: 'st', style: { ...style.row, ...style.label } }, [
         h('span', { key: 'd', style: style.dot(funded) }),
