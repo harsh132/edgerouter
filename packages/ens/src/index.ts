@@ -9,3 +9,6 @@
  */
 export * from './deployment';
 export * from './client';
+export * from './abi';
+export * from './register';
+export * from './wallet';
