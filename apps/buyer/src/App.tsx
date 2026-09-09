@@ -82,7 +82,12 @@ export const App = () => {
           model: 'openai/gpt-4o-mini',
           messages: [{ role: 'user', content: prompt }],
         },
-        onStep: (step, detail) => setSteps((prior) => [...prior, { step, detail }]),
+        /*
+          `detail` is omitted rather than set to undefined: under
+          exactOptionalPropertyTypes an absent optional field and one holding
+          undefined are different types, and only the first matches.
+        */
+        onStep: (step, detail) => setSteps((prior) => [...prior, { step, ...(detail ? { detail } : {}) }]),
       });
       setResult(paid);
       await refresh();

@@ -1,762 +1,221 @@
 /*
-  Dark by default, and deliberately so.
+  Modern Minimal, as published, plus the few things this app adds.
 
-  The whole surface is a room with several workers in it and one shared wallet.
-  Dark keeps the colour budget for the two things that carry meaning: an agent's
-  identity, which is its blob, and its money, which is the only thing that ever
-  goes red.
+  The palette is not ours and is deliberately unedited — it is the tweakcn
+  theme's own `light` and `dark` blocks, copied whole. Anything this app needs
+  that a general-purpose theme does not have (an agent's identity colour, the
+  breathing pulse on one that is working) is defined after them, so a future
+  version of the theme can be dropped in without hunting for our edits inside
+  it.
+
+  Dark is the default: `data-theme="dark"` is on the document, and the light
+  block is what remains if it is removed.
 */
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
 :root {
-  color-scheme: dark;
-
-  --bg: #0b0b0e;
-  --rail: #111116;
-  --panel: #121218;
-  --raised: #1a1a22;
-  --line: #24242e;
-  --line-soft: #1c1c24;
-
-  --ink: #ececf1;
-  --ink-dim: #a1a1ae;
-  --ink-faint: #6b6b7a;
-
-  --accent: #7c5cff;
-  --good: #35c17e;
-  --warn: #e0a33a;
-  --bad: #f0555f;
-
-  --bubble-you: #26262f;
-  --bubble-them: #17171e;
-
-  --radius: 14px;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
-  font-size: 14px;
-  color: var(--ink);
-  background: var(--bg);
+  --background: oklch(1.0000 0 0);
+  --foreground: oklch(0.3211 0 0);
+  --card: oklch(1.0000 0 0);
+  --card-foreground: oklch(0.3211 0 0);
+  --popover: oklch(1.0000 0 0);
+  --popover-foreground: oklch(0.3211 0 0);
+  --primary: oklch(0.6231 0.1880 259.8145);
+  --primary-foreground: oklch(1.0000 0 0);
+  --secondary: oklch(0.9670 0.0029 264.5419);
+  --secondary-foreground: oklch(0.4461 0.0263 256.8018);
+  --muted: oklch(0.9846 0.0017 247.8389);
+  --muted-foreground: oklch(0.5510 0.0234 264.3637);
+  --accent: oklch(0.9514 0.0250 236.8242);
+  --accent-foreground: oklch(0.3791 0.1378 265.5222);
+  --destructive: oklch(0.6368 0.2078 25.3313);
+  --destructive-foreground: oklch(1.0000 0 0);
+  --border: oklch(0.9276 0.0058 264.5313);
+  --input: oklch(0.9276 0.0058 264.5313);
+  --ring: oklch(0.6231 0.1880 259.8145);
+  --chart-1: oklch(0.6231 0.1880 259.8145);
+  --chart-2: oklch(0.5461 0.2152 262.8809);
+  --chart-3: oklch(0.4882 0.2172 264.3763);
+  --chart-4: oklch(0.4244 0.1809 265.6377);
+  --chart-5: oklch(0.3791 0.1378 265.5222);
+  --radius: 0.375rem;
+  --sidebar: oklch(0.9846 0.0017 247.8389);
+  --sidebar-foreground: oklch(0.3211 0 0);
+  --sidebar-primary: oklch(0.6231 0.1880 259.8145);
+  --sidebar-primary-foreground: oklch(1.0000 0 0);
+  --sidebar-accent: oklch(0.9514 0.0250 236.8242);
+  --sidebar-accent-foreground: oklch(0.3791 0.1378 265.5222);
+  --sidebar-border: oklch(0.9276 0.0058 264.5313);
+  --sidebar-ring: oklch(0.6231 0.1880 259.8145);
+  --shadow-color: oklch(0 0 0);
+  --shadow-opacity: 0.1;
+  --shadow-blur: 3px;
+  --shadow-spread: 0px;
+  --shadow-offset-x: 0;
+  --shadow-offset-y: 1px;
+  --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+  --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+  --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+  --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+  --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 2px 4px -1px hsl(0 0% 0% / 0.10);
+  --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 4px 6px -1px hsl(0 0% 0% / 0.10);
+  --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 8px 10px -1px hsl(0 0% 0% / 0.10);
+  --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
+  --tracking-normal: 0em;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-serif: "Source Serif 4", ui-serif, Georgia, serif;
+  --tracking-normal: 0em;
 }
 
-* {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-}
-
-body {
-  overflow: hidden;
-}
-
-button {
-  font: inherit;
-  color: inherit;
-  border: none;
-  background: none;
-  cursor: pointer;
-}
-
-input,
-textarea,
-select {
-  font: inherit;
-  color: inherit;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 9px 11px;
-  width: 100%;
-  outline: none;
-}
-
-input:focus,
-textarea:focus,
-select:focus {
-  border-color: var(--accent);
-}
-
-textarea {
-  resize: vertical;
-  min-height: 68px;
-  line-height: 1.5;
-}
-
-/* ------------------------------------------------------------------ shell */
-
-.app {
-  display: grid;
-  grid-template-columns: 288px minmax(0, 1fr) 320px;
-  height: 100%;
-}
-
-.rail {
-  background: var(--rail);
-  border-right: 1px solid var(--line-soft);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.rail-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 14px 14px 10px;
-}
-
-.rail-title {
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  flex: 1;
-}
-
-.rail-list {
-  overflow-y: auto;
-  flex: 1;
-  padding: 4px 8px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.rail-foot {
-  border-top: 1px solid var(--line-soft);
-  padding: 10px 14px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* ------------------------------------------------------------- agent row */
-
-.row {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  padding: 9px 8px;
-  border-radius: 11px;
-  text-align: left;
-  width: 100%;
-}
-
-.row:hover {
-  background: #ffffff08;
-}
-
-.row[data-active='true'] {
-  background: #ffffff0f;
-}
-
-.row-top {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.row-name {
-  font-weight: 550;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.row-when {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--ink-faint);
-  flex: none;
-}
-
-.row-sub {
-  font-size: 12px;
-  color: var(--ink-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.row[data-revoked='true'] .row-name,
-.row[data-revoked='true'] .row-sub {
-  color: var(--ink-faint);
-  text-decoration: line-through;
-  text-decoration-color: #ffffff33;
+[data-theme='dark'] {
+  --background: oklch(0.2046 0 0);
+  --foreground: oklch(0.9219 0 0);
+  --card: oklch(0.2686 0 0);
+  --card-foreground: oklch(0.9219 0 0);
+  --popover: oklch(0.2686 0 0);
+  --popover-foreground: oklch(0.9219 0 0);
+  --primary: oklch(0.6231 0.1880 259.8145);
+  --primary-foreground: oklch(1.0000 0 0);
+  --secondary: oklch(0.2686 0 0);
+  --secondary-foreground: oklch(0.9219 0 0);
+  --muted: oklch(0.2393 0 0);
+  --muted-foreground: oklch(0.7155 0 0);
+  --accent: oklch(0.3791 0.1378 265.5222);
+  --accent-foreground: oklch(0.8823 0.0571 254.1284);
+  --destructive: oklch(0.6368 0.2078 25.3313);
+  --destructive-foreground: oklch(1.0000 0 0);
+  --border: oklch(0.3715 0 0);
+  --input: oklch(0.3715 0 0);
+  --ring: oklch(0.6231 0.1880 259.8145);
+  --chart-1: oklch(0.7137 0.1434 254.6240);
+  --chart-2: oklch(0.6231 0.1880 259.8145);
+  --chart-3: oklch(0.5461 0.2152 262.8809);
+  --chart-4: oklch(0.4882 0.2172 264.3763);
+  --chart-5: oklch(0.4244 0.1809 265.6377);
+  --radius: 0.375rem;
+  --sidebar: oklch(0.2046 0 0);
+  --sidebar-foreground: oklch(0.9219 0 0);
+  --sidebar-primary: oklch(0.6231 0.1880 259.8145);
+  --sidebar-primary-foreground: oklch(1.0000 0 0);
+  --sidebar-accent: oklch(0.3791 0.1378 265.5222);
+  --sidebar-accent-foreground: oklch(0.8823 0.0571 254.1284);
+  --sidebar-border: oklch(0.3715 0 0);
+  --sidebar-ring: oklch(0.6231 0.1880 259.8145);
+  --shadow-color: oklch(0 0 0);
+  --shadow-opacity: 0.1;
+  --shadow-blur: 3px;
+  --shadow-spread: 0px;
+  --shadow-offset-x: 0;
+  --shadow-offset-y: 1px;
+  --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+  --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+  --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+  --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10);
+  --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 2px 4px -1px hsl(0 0% 0% / 0.10);
+  --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 4px 6px -1px hsl(0 0% 0% / 0.10);
+  --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 8px 10px -1px hsl(0 0% 0% / 0.10);
+  --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
 }
 
 /*
-  The blob. An agent's only decoration, and it does real work: colour derived
-  from the name means the same agent is the same colour everywhere, so the rail,
-  the thread header and the ledger all agree without anyone storing a swatch.
+  Tailwind v4 takes its scale from `@theme`, so every token the components use
+  has to be mapped here — this is the bridge between the CSS variables above and
+  utilities like `bg-card` or `text-muted-foreground`.
 */
-.blob {
-  width: 34px;
-  height: 34px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  font-size: 13px;
-  font-weight: 650;
-  color: #0b0b0e;
-  flex: none;
-  position: relative;
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-serif: var(--font-serif);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --shadow-2xs: var(--shadow-2xs);
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow: var(--shadow);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+  --shadow-2xl: var(--shadow-2xl);
 }
 
-.blob[data-size='sm'] {
-  width: 22px;
-  height: 22px;
-  border-radius: 8px;
-  font-size: 10px;
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    letter-spacing: var(--tracking-normal);
+    overscroll-behavior: none;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
 }
 
-.blob[data-size='lg'] {
-  width: 52px;
-  height: 52px;
-  border-radius: 18px;
-  font-size: 19px;
-}
+/*
+  The pulse on an agent that is working.
 
-.blob[data-dim='true'] {
-  filter: grayscale(1) brightness(0.6);
-}
-
-/* The working pulse. Only ever on while money is actually moving. */
-.pip {
-  position: absolute;
-  right: -2px;
-  bottom: -2px;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  border: 2.5px solid var(--rail);
-  background: var(--good);
-}
-
-.pip[data-state='running'] {
-  animation: breathe 1.4s ease-in-out infinite;
-}
-
-.pip[data-state='broke'] {
-  background: var(--warn);
-}
-
-.pip[data-state='revoked'] {
-  background: var(--bad);
-}
-
-@keyframes breathe {
+  Only ever animating while money is actually moving, which is the one thing on
+  this screen worth an animation — everything else is text that changed.
+*/
+@keyframes crew-breathe {
   0%,
   100% {
     opacity: 1;
     transform: scale(1);
   }
   50% {
-    opacity: 0.45;
-    transform: scale(0.82);
+    opacity: 0.4;
+    transform: scale(0.8);
   }
 }
 
-/* ----------------------------------------------------------------- thread */
-
-.thread {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--bg);
-}
-
-.thread-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 13px 18px;
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.thread-head-name {
-  font-weight: 600;
-}
-
-.thread-head-sub {
-  font-size: 12px;
-  color: var(--ink-faint);
-  font-family: var(--mono);
-}
-
-.thread-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 22px 18px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.stamp {
-  align-self: center;
-  font-size: 11px;
-  color: var(--ink-faint);
-  margin: 6px 0;
-}
-
-.bubble {
-  max-width: 78%;
-  padding: 11px 14px;
-  border-radius: 18px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.bubble[data-from='you'] {
-  align-self: flex-end;
-  background: var(--bubble-you);
-  border-bottom-right-radius: 6px;
-}
-
-.bubble[data-from='them'] {
-  align-self: flex-start;
-  background: var(--bubble-them);
-  border: 1px solid var(--line-soft);
-  border-bottom-left-radius: 6px;
-}
-
-/*
-  What the reply cost, attached to the reply.
-
-  This is the one thing the app is really about, so it sits on the message
-  rather than in a sidebar total: every bubble on the left was bought, and the
-  price is right there under it.
-*/
-.receipt {
-  align-self: flex-start;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  color: var(--ink-faint);
-  font-family: var(--mono);
-  margin: -6px 0 2px 4px;
-}
-
-.receipt b {
-  color: var(--ink-dim);
-  font-weight: 550;
-}
-
-.outcome {
-  align-self: center;
-  font-size: 12px;
-  color: var(--ink-dim);
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 5px 13px;
-  margin: 6px 0;
-}
-
-.outcome[data-bad='true'] {
-  color: #ffd4d7;
-  border-color: #4a2027;
-  background: #2a1519;
-}
-
-.thinking {
-  align-self: flex-start;
-  display: flex;
-  gap: 4px;
-  padding: 12px 15px;
-}
-
-.thinking i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ink-faint);
-  animation: bounce 1.2s infinite;
-}
-
-.thinking i:nth-child(2) {
-  animation-delay: 0.15s;
-}
-
-.thinking i:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-@keyframes bounce {
-  0%,
-  60%,
-  100% {
-    opacity: 0.25;
-    transform: translateY(0);
-  }
-  30% {
-    opacity: 1;
-    transform: translateY(-3px);
-  }
-}
-
-/* -------------------------------------------------------------- composer */
-
-.composer {
-  padding: 12px 18px 18px;
-  border-top: 1px solid var(--line-soft);
-}
-
-.composer-box {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 22px;
-  padding: 6px 6px 6px 16px;
-}
-
-.composer-box:focus-within {
-  border-color: #3a3a48;
-}
-
-.composer textarea {
-  border: none;
-  background: none;
-  padding: 8px 0;
-  min-height: 24px;
-  max-height: 160px;
-}
-
-.send {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: var(--ink);
-  color: var(--bg);
-  display: grid;
-  place-items: center;
-  flex: none;
-}
-
-.send:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
-.send[data-stop='true'] {
-  background: var(--bad);
-  color: #fff;
-}
-
-/* ---------------------------------------------------------------- detail */
-
-.detail {
-  background: var(--panel);
-  border-left: 1px solid var(--line-soft);
-  overflow-y: auto;
-  padding: 18px 16px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.detail-hero {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 9px;
-  text-align: center;
-  padding: 6px 0 2px;
-}
-
-.ens {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--ink-dim);
-  overflow-wrap: anywhere;
-}
-
-.ens[data-none='true'] {
-  color: var(--ink-faint);
-  font-style: italic;
-}
-
-.section {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-
-.section-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--ink-faint);
-}
-
-/*
-  Spend against limit. The bar is the point of the panel — an agent's budget is
-  the only number here that can stop it working, so it gets the space.
-*/
-.meter {
-  height: 7px;
-  border-radius: 4px;
-  background: #ffffff10;
-  overflow: hidden;
-}
-
-.meter i {
-  display: block;
-  height: 100%;
-  background: var(--good);
-  transition: width 0.5s ease;
-}
-
-.meter i[data-level='warn'] {
-  background: var(--warn);
-}
-
-.meter i[data-level='bad'] {
-  background: var(--bad);
-}
-
-.money {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  font-family: var(--mono);
-}
-
-.money b {
-  font-size: 19px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.money span {
-  color: var(--ink-faint);
-  font-size: 12px;
-}
-
-.facts {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  font-size: 12px;
-}
-
-.fact {
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
-}
-
-.fact dt {
-  color: var(--ink-faint);
-  flex: none;
-}
-
-.fact dd {
-  margin: 0;
-  font-family: var(--mono);
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-
-.ledger {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.ledger-row {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  gap: 9px;
-  align-items: baseline;
-  padding: 6px 2px;
-  font-size: 12px;
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.ledger-row:last-child {
-  border-bottom: none;
-}
-
-.ledger-n {
-  color: var(--ink-faint);
-  font-family: var(--mono);
-}
-
-.ledger-text {
-  color: var(--ink-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ledger-cost {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-}
-
-/* --------------------------------------------------------------- buttons */
-
-.btn {
-  border-radius: 10px;
-  padding: 9px 13px;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  font-weight: 500;
-  text-align: center;
-}
-
-.btn:hover {
-  background: #ffffff12;
-}
-
-.btn[data-kind='primary'] {
-  background: var(--ink);
-  color: var(--bg);
-  border-color: transparent;
-}
-
-.btn[data-kind='primary']:hover {
-  background: #fff;
-}
-
-.btn[data-kind='danger'] {
-  color: #ffb8bd;
-  border-color: #3a1d22;
-  background: #21151800;
-}
-
-.btn[data-kind='danger']:hover {
-  background: #2a1519;
-}
-
-.btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* ---------------------------------------------------------------- dialog */
-
-.veil {
-  position: fixed;
-  inset: 0;
-  background: #000000a8;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  z-index: 20;
-}
-
-.sheet {
-  width: min(440px, 100%);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-height: 90vh;
-  overflow-y: auto;
-}
-
-.sheet h2 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.field label {
-  font-size: 12px;
-  color: var(--ink-dim);
-}
-
-.field .hint {
-  font-size: 11px;
-  color: var(--ink-faint);
-  line-height: 1.5;
-}
-
-.error {
-  font-size: 12px;
-  color: #ffb8bd;
-  background: #2a1519;
-  border: 1px solid #3a1d22;
-  border-radius: 9px;
-  padding: 9px 11px;
-  line-height: 1.5;
-}
-
-.actions {
-  display: flex;
-  gap: 9px;
-  justify-content: flex-end;
-}
-
-/* ----------------------------------------------------------------- empty */
-
-.empty {
-  flex: 1;
-  display: grid;
-  place-items: center;
-  padding: 40px;
-}
-
-.empty-inner {
-  max-width: 340px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  align-items: center;
-  color: var(--ink-dim);
-  line-height: 1.6;
-}
-
-.empty-inner h3 {
-  margin: 0;
-  font-size: 16px;
-  color: var(--ink);
-}
-
-.wallet-line {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 12px;
-}
-
-.wallet-line .dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--good);
-  flex: none;
-}
-
-.wallet-line span {
-  color: var(--ink-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wallet-line b {
-  margin-left: auto;
-  font-family: var(--mono);
-  font-weight: 550;
-  flex: none;
+.crew-breathe {
+  animation: crew-breathe 1.4s ease-in-out infinite;
 }
