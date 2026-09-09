@@ -43,6 +43,22 @@ type Clients = { public: PublicClient; wallet: WalletClient };
 /** A name's id inside its parent registry. */
 export const labelIdOf = (label: string): bigint => BigInt(keccak256(stringToHex(ensName(label))));
 
+/**
+ * The id the registry actually stores a name under.
+ *
+ * ENSv2 token ids carry a version in their low 32 bits, and the registry
+ * canonicalises by clearing them — so `ownerOf(labelIdOf(label))` asks about a
+ * token that has never existed and answers with the zero address, for a name
+ * that is registered and owned. Every read keyed by id has to canonicalise
+ * first, or it quietly reports that nothing is there.
+ *
+ * This was not a theoretical problem: it made the "already registered to us,
+ * carry on" recovery below unreachable, so a mint interrupted between
+ * `register` and its records left a name that resolved to nothing, could not
+ * be minted again, and could not be seen.
+ */
+export const canonicalIdOf = (label: string): bigint => labelIdOf(label) & ~((1n << 32n) - 1n);
+
 /** Far enough out that an agent does not expire mid-task. */
 const DEFAULT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -144,7 +160,7 @@ export const mintAgentName = async (
         address: params.parentRegistry,
         abi: registryAbi,
         functionName: 'ownerOf',
-        args: [labelIdOf(label)],
+        args: [canonicalIdOf(label)],
       })
       .catch(() => null);
 

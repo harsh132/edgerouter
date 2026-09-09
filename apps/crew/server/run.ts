@@ -111,6 +111,17 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
       the loop could be someone else's.
     */
     streamFn: (piModel, context, options) => api.stream(piModel, context, { ...options, fetch }),
+    /*
+      pi will not call the provider until it has a key, and the whole premise
+      here is that there isn't one — the gate is paid, not authenticated. So it
+      is handed a constant to satisfy the check.
+
+      Deliberately not a secret and not treated as one: the gate ignores
+      Authorization entirely and answers 402 regardless, so this string grants
+      nothing. Naming it after what actually pays makes that visible in a
+      request log rather than looking like a credential someone leaked.
+    */
+    getApiKey: () => 'x402-no-api-key',
     initialState: {
       messages: [],
       systemPrompt: [
@@ -145,30 +156,49 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
     emit({ type: 'step', agentId: agent.id, step, spentMinor: agent.spentMinor });
   });
 
+  /*
+    How a run ends, and where to look for it.
+
+    `prompt()` resolves rather than throws when the stream fails — the reason
+    goes to `state.errorMessage` instead. Treating a resolved promise as success
+    is therefore wrong, and wrong in the worst direction: a run that bought
+    nothing and failed reported "finished" with an empty answer. Both places are
+    checked, and the thrown case is kept because an abort still throws.
+  */
+  let thrown: Error | null = null;
   try {
     await pi.prompt(prompt);
+  } catch (error) {
+    thrown = error as Error;
+  }
+
+  const failure = thrown?.message ?? pi.state.errorMessage;
+  const stoppedByHand = thrown?.name === 'AbortError' || pi.signal?.aborted === true;
+
+  if (!failure) {
     task.outcome = 'finished';
     task.answer = task.steps.at(-1)?.text ?? '';
     agent.status = 'done';
-  } catch (error) {
-    if (error instanceof BudgetExhausted) {
-      /*
-        Said in terms of money, because that is what happened. The distinction
-        between "spent its budget" and "was revoked" comes from the authority's
-        own message, which names the node and the reason.
-      */
-      task.outcome = error.reason.includes('resolve')
-        ? `stopped — its name no longer resolves, so the authority refused to sign`
-        : `stopped — its budget of ${formatAmount(agent.network, BigInt(agent.budgetMinor))} is spent`;
-      agent.status = error.reason.includes('resolve') ? 'revoked' : 'broke';
-    } else if ((error as Error).name === 'AbortError' || pi.state.errorMessage === undefined) {
-      task.outcome = 'stopped by you';
-      agent.status = 'stopped';
-    } else {
-      task.outcome = `failed — ${(error as Error).message}`;
-      agent.status = 'idle';
-    }
-  } finally {
+  } else if (thrown instanceof BudgetExhausted || failure.includes('BudgetExhausted')) {
+    /*
+      Said in terms of money, because that is what happened. The difference
+      between "spent its budget" and "was revoked" comes from the authority's
+      own words, which name the node and the reason.
+    */
+    const revoked = failure.includes('resolve');
+    task.outcome = revoked
+      ? 'stopped — its name no longer resolves, so the authority refused to sign'
+      : `stopped — its budget of ${formatAmount(agent.network, BigInt(agent.budgetMinor))} is spent`;
+    agent.status = revoked ? 'revoked' : 'broke';
+  } else if (stoppedByHand) {
+    task.outcome = 'stopped by you';
+    agent.status = 'stopped';
+  } else {
+    task.outcome = `failed — ${failure}`;
+    agent.status = 'idle';
+  }
+
+  {
     unsubscribe();
     running.delete(agent.id);
     task.endedAt = Date.now();
