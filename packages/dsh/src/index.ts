@@ -811,13 +811,27 @@ export function apply(ctx: Context, config: Config): void {
         started — which is what it did.
       */
       if (first) void syncDelegation();
+      /*
+        Both numbers, once there is something to say about both.
+
+        The undeposited remainder was only ever mentioned while it was the
+        problem — a wallet holding USDC with nothing deposited. After a
+        deposit it vanished from the UI, which reads as though the rest of the
+        money is gone rather than one step away from being spendable. Only the
+        deposited half can pay, so that stays the headline; the remainder is a
+        footnote, not a second balance competing with it.
+      */
+      const undeposited =
+        funding.walletMinor > 0n
+          ? `, ${formatAmount(evmWallet.network, funding.walletMinor)} in the wallet not yet deposited`
+          : '';
       publish(
         evmWallet.address,
-        `ready — ${formatAmount(evmWallet.network, funding.availableMinor)} deposited in the Gateway`,
+        `ready — ${formatAmount(evmWallet.network, funding.availableMinor)} deposited in the Gateway${undeposited}`,
       );
       if (first) {
         ctx.logger.info(
-          `llm-edgerouter: funded — ${formatAmount(evmWallet.network, funding.availableMinor)} in the Gateway`,
+          `llm-edgerouter: funded — ${formatAmount(evmWallet.network, funding.availableMinor)} in the Gateway${undeposited}`,
         );
       }
       clearPolling();

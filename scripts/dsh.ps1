@@ -76,5 +76,26 @@ $env:DSH_DESKTOP_PNPM_ENTRY = $pnpmEntry
 $env:DSH_DESKTOP_ELECTRON_VERSION = $electronVersion
 $env:PATH = "$shimDir;$env:PATH"
 
-& $app --expose-internals $bootstrap @Args
-exit $LASTEXITCODE
+<#
+  Run through Start-Process with the streams redirected to files, then print
+  them, rather than calling the app directly.
+
+  Called directly, Electron writes to the console handle and nothing reaches a
+  captured pipe — so `dsh plugin add` returns exit 0 with no output whether it
+  installed anything or not. A silent success and a silent no-op are the same
+  observation, which is how a plugin can appear installed for an hour while the
+  old version is still on disk. Redirecting is the only way to see which
+  happened.
+#>
+$outFile = New-TemporaryFile
+$errFile = New-TemporaryFile
+$quoted = @('--expose-internals', "`"$bootstrap`"") + $Args
+
+$process = Start-Process -FilePath $app -ArgumentList $quoted -NoNewWindow -Wait -PassThru `
+    -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+
+Get-Content $outFile -ErrorAction SilentlyContinue
+Get-Content $errFile -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+Remove-Item $outFile, $errFile -ErrorAction SilentlyContinue
+
+exit $process.ExitCode

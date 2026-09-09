@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-edgerouter",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "A DeepSeek Harness model provider that pays for its own inference over x402. No account, no API key \u2014 a wallet.",
   "license": "MIT",
   "type": "module",
