@@ -92,7 +92,6 @@ export const ensureAgentName = async (
     subdelegate?: boolean;
     grantedMinor?: bigint;
     asset?: string;
-    gate?: string;
     ens?: EnsClient;
   },
 ): Promise<EnsuredName> => {
@@ -130,7 +129,6 @@ export const ensureAgentName = async (
     ...(params.subdelegate === undefined ? {} : { subdelegate: params.subdelegate }),
     ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
     ...(params.asset ? { asset: params.asset } : {}),
-    ...(params.gate ? { gate: params.gate } : {}),
   });
 
   return { ...agent, minted: true };
@@ -144,13 +142,12 @@ export const ensureAgentName = async (
  */
 export const ensureSessionName = async (
   clients: Clients,
-  params: { owner: Address; seed?: string; gate?: string; ens?: EnsClient },
+  params: { owner: Address; seed?: string; ens?: EnsClient },
 ): Promise<EnsuredName> =>
   ensureAgentName(clients, {
     label: sessionLabelFor(params.owner, params.seed ?? ''),
     parent: ROOT_NAME,
     owner: params.owner,
     subdelegate: true,
-    ...(params.gate ? { gate: params.gate } : {}),
     ...(params.ens ? { ens: params.ens } : {}),
   });

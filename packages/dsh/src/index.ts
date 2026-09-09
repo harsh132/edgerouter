@@ -1222,7 +1222,7 @@ export function apply(ctx: Context, config: Config): void {
 
       const session = await ensureSessionName(
         { public: signer.public, wallet: signer.wallet },
-        { owner: signer.address, gate: current().baseURL ?? DEFAULT_BASE_URL },
+        { owner: signer.address },
       );
 
       reportName(
@@ -1345,7 +1345,6 @@ export function apply(ctx: Context, config: Config): void {
               owner: ensSigner.address,
               grantedMinor: amountMinor,
               asset: now.network ?? DEFAULT_NETWORK,
-              gate: now.baseURL ?? DEFAULT_BASE_URL,
             },
           );
         }

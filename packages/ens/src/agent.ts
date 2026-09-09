@@ -101,7 +101,6 @@ export const mintAgentName = async (
     subdelegate?: boolean;
     grantedMinor?: bigint;
     asset?: string;
-    gate?: string;
     expiresAt?: number;
   },
 ): Promise<AgentName> => {
@@ -182,7 +181,6 @@ export const mintAgentName = async (
     ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
     ...(params.asset ? { asset: params.asset } : {}),
     parent: ensName(params.parent),
-    ...(params.gate ? { gate: params.gate } : {}),
     expiresAt,
   });
 

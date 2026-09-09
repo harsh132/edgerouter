@@ -24,7 +24,7 @@ say(`  gas        ${formatEther(gas)} ETH`);
 
 const session = await ensureSessionName(
   { public: signer.public, wallet: signer.wallet },
-  { owner: signer.address, seed, gate: 'https://edgerouter-gate.prakashharsh32.workers.dev' },
+  { owner: signer.address, seed },
 );
 
 say(`\n  name       ${session.name}`);

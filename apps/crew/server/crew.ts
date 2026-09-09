@@ -260,7 +260,6 @@ export const hire = async (
           */
           subdelegate: false,
           grantedMinor: params.budgetMinor,
-          gate: runtime.gate,
         },
       );
       agent.name = named.name;

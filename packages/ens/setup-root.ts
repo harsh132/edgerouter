@@ -62,7 +62,6 @@ const described = await describeAgent(clients, {
   resolver: resolver.address,
   name,
   address: signer.address,
-  gate: 'https://edgerouter-gate.prakashharsh32.workers.dev',
 });
 say(`
   setAddress      ${described.address}`);

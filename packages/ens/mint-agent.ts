@@ -71,7 +71,6 @@ const agent = await mintAgentName(clients, {
   owner: signer.address,
   subdelegate,
   ...(budget ? { grantedMinor: BigInt(budget), asset: 'hedera:testnet/native' } : {}),
-  gate: 'https://edgerouter-gate.prakashharsh32.workers.dev',
 });
 
 say(`  name       ${agent.name}`);
@@ -83,4 +82,3 @@ const ens = createEnsClient();
 say(`\n  resolves to  ${(await ens.addressOf(agent.name)) ?? 'nothing yet'}`);
 if (budget) say(`  granted      ${formatUnits(BigInt(budget), 8)} (${await ens.textOf(agent.name, RECORD.granted)} minor)`);
 say(`  parent       ${await ens.textOf(agent.name, RECORD.parent)}`);
-say(`  gate         ${await ens.textOf(agent.name, RECORD.gate)}\n`);

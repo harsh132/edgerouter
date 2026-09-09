@@ -21,7 +21,7 @@
  * The address record is the point: it is the account that actually pays, so a
  * name resolving to it names something that acts rather than something that
  * merely exists. The text records carry what the delegation tree knows at mint
- * time — what was granted, by whom, against which gate — so an agent's
+ * time — what was granted, and by whom — so an agent's
  * allowance is legible to anything that can resolve a name, without access to
  * the authority that holds the money. What is *left* of that allowance is not
  * here, because only the authority knows it.
@@ -48,6 +48,16 @@ export const ETH_COIN_TYPE = 60n;
  * every other application that might ever write to this name.
  */
 export const RECORD = {
+  /*
+    Nothing about where an agent buys is written here.
+    
+    There was an `er.gate` key, holding the gate's URL, and it had no reader:
+    the runtime takes the gate from its own configuration, the authority never
+    consults it, and the guard only asks whether the name resolves. It cost a
+    transaction per mint to publish an operator's endpoint that nothing
+    resolved it for. A record with no consumer is not documentation, it is
+    disclosure with a gas bill.
+  */
   /**
    * What this agent was granted at mint time, in the asset's smallest unit.
    *
@@ -65,8 +75,6 @@ export const RECORD = {
   asset: 'er.asset',
   /** The name that delegated to this one. Empty at the root. */
   parent: 'er.parent',
-  /** Where this agent buys inference. */
-  gate: 'er.gate',
   /** Unix seconds after which the allowance is dead. */
   expires: 'er.expires',
 } as const;
@@ -177,7 +185,7 @@ export const setText = async (
  * Writes the parts of an agent anyone can see.
  *
  * Separate from `describeAgent` because these change and that does not. A name
- * is minted once with a grant and a gate; its picture and its description are
+ * is minted once with a grant; its picture and its description are
  * edited afterwards, possibly often, and each edit is a transaction the caller
  * chose to pay for. Only the keys actually passed are written, so editing a
  * description does not rewrite an avatar.
@@ -225,7 +233,6 @@ export const describeAgent = async (
     grantedMinor?: bigint;
     asset?: string;
     parent?: string;
-    gate?: string;
     expiresAt?: number;
   },
 ): Promise<{ address: Hash; texts: Hash[] }> => {
@@ -241,7 +248,6 @@ export const describeAgent = async (
       : ([[RECORD.granted, params.grantedMinor.toString()]] as [string, string][])),
     ...(params.asset ? ([[RECORD.asset, params.asset]] as [string, string][]) : []),
     ...(params.parent ? ([[RECORD.parent, params.parent]] as [string, string][]) : []),
-    ...(params.gate ? ([[RECORD.gate, params.gate]] as [string, string][]) : []),
     ...(params.expiresAt
       ? ([[RECORD.expires, String(Math.floor(params.expiresAt / 1000))]] as [string, string][])
       : []),
