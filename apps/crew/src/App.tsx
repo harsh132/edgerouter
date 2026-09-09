@@ -76,7 +76,7 @@ export const App = () => {
         {...(log.at(-1) ? { note: log.at(-1)! } : {})}
       />
 
-      {agent ? <AgentThread agent={agent} /> : <NoAgents root={state.root} onHire={() => setHiring(true)} />}
+      {agent ? <AgentThread agent={agent} state={state} /> : <NoAgents root={state.root} onHire={() => setHiring(true)} />}
 
       {agent ? <AgentDetail agent={agent} state={state} /> : <aside className="border-l bg-card" />}
 

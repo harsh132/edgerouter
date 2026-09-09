@@ -11,7 +11,7 @@
  * It is also why an agent cannot escape its budget by being clever: there is no
  * other way out of the process. It has no key, and this is its only network.
  */
-import { payAndFetch, AuthorityDenied, type PaymentSigner } from '../../../packages/sdk/src/index';
+import { payAndFetch, AuthorityDenied, PaymentRefused, type PaymentSigner } from '../../../packages/sdk/src/index';
 
 export type Spend = {
   /** Smallest units this call cost. Zero for anything the gate served free. */
@@ -31,7 +31,27 @@ export const payingFetch = (params: {
   network: string;
   /** The most any single call may cost. A guard against a mispriced quote. */
   maxAmountMinor: bigint;
+  /**
+   * What the agent has left, which is not always the same number.
+   *
+   * The per-call ceiling is normally a tenth of the budget and the remainder is
+   * whatever is unspent — but near the end they converge, and the two cases the
+   * cap can refuse mean opposite things. "This one call is priced absurdly" is a
+   * problem with the quote; "this call costs more than everything you have
+   * left" is simply being broke. Without this number they are the same refusal.
+   */
+  remainingMinor: bigint;
   onSpend: (spend: Spend) => void;
+  /**
+   * Told when the authority refuses, because throwing is not enough.
+   *
+   * pi catches whatever a `fetch` throws and replaces it with a message of its
+   * own — "Connection error." — so an agent that ran out of money reported a
+   * network problem, and the branch that would have said so in words about
+   * money never matched. The error still throws, to stop the request; this
+   * says what it was, to whoever is going to have to explain it.
+   */
+  onRefusal?: (refusal: BudgetExhausted) => void;
 }): typeof globalThis.fetch => {
   return async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
@@ -72,9 +92,36 @@ export const payingFetch = (params: {
         throws, and retrying a refusal from the authority is pointless — the
         budget will not have refilled between attempts, and each retry is
         another quote the gate has to price. Raised as its own type so the
-        runtime can stop the agent and say why, in words about money.
+        runtime can stop the agent and say why, in words about money — and
+        reported through `onRefusal`, because the type does not survive the
+        trip through pi.
       */
-      if (error instanceof AuthorityDenied) throw new BudgetExhausted(error.message);
+      if (error instanceof AuthorityDenied) {
+        const refusal = new BudgetExhausted(error.message);
+        params.onRefusal?.(refusal);
+        throw refusal;
+      }
+
+      /*
+        Running out of money usually never reaches the authority at all.
+
+        `payAndFetch` compares the quote against the cap before it signs
+        anything, so an agent whose remaining balance is smaller than one call
+        is refused here — locally, with `over_max_amount` — and the authority is
+        never asked. That is the ordinary way a budget ends, and it was
+        arriving at the user as "Connection error." like everything else.
+      */
+      if (error instanceof PaymentRefused && error.reason === 'over_max_amount') {
+        const broke = params.maxAmountMinor >= params.remainingMinor;
+        const refusal = new BudgetExhausted(
+          broke
+            ? `the next call costs more than the ${params.remainingMinor} it has left`
+            : `a single call was quoted above this agent's per-call cap: ${error.message}`,
+        );
+        params.onRefusal?.(refusal);
+        throw refusal;
+      }
+
       throw error;
     }
   };

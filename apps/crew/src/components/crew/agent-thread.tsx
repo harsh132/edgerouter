@@ -8,12 +8,13 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { AgentMark } from './agent-mark';
+import { EditDialog } from './edit-dialog';
 import { Receipt } from './receipt';
 import { ToolCall } from './tool-call';
 import { Typing } from './typing';
 import { nameOf, when } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { assign, halt, type Agent, type Step, type Task } from '@/api';
+import { assign, halt, type Agent, type State, type Step, type Task } from '@/api';
 
 const Bubble = ({ from, children }: { from: 'you' | 'them'; children: string }) => (
   <div
@@ -43,16 +44,29 @@ const StepView = ({ step, network }: { step: Step; network: string }) => (
 
 const Outcome = ({ text }: { text: string }) => {
   /*
-    Only the endings that cost the user something are marked. "Stopped by you"
-    is an ordinary ending and colouring it red would make an ordinary action
-    look like a fault.
+    Three endings, and only one of them is a fault.
+
+    Something actually broke — red. Something cut the agent off, which is the
+    revocation working and worth seeing — red, because it is the one ending
+    somebody needs to notice. Running out of budget is neither: it is the
+    product doing exactly what it promised, and painting it as an error taught
+    the user to read a working spending limit as a crash.
+
+    "Stopped by you" is ordinary too, and was already left alone.
   */
-  const bad = text.startsWith('stopped —') || text.startsWith('failed');
+  const broke = text.startsWith('failed');
+  const cutOff = text.includes('no longer resolves');
+  const spent = text.startsWith('stopped —') && !cutOff;
+
   return (
     <div
       className={cn(
         'self-center rounded-full border px-3.5 py-1.5 text-xs',
-        bad ? 'border-destructive/40 bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground',
+        broke || cutOff
+          ? 'border-destructive/40 bg-destructive/10 text-destructive'
+          : spent
+            ? 'border-border bg-muted text-foreground'
+            : 'bg-muted text-muted-foreground',
       )}
     >
       {text}
@@ -71,7 +85,7 @@ const TaskView = ({ task, network }: { task: Task; network: string }) => (
   </>
 );
 
-export const AgentThread = ({ agent }: { agent: Agent }) => {
+export const AgentThread = ({ agent, state }: { agent: Agent; state: State }) => {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement | null>(null);
@@ -87,6 +101,16 @@ export const AgentThread = ({ agent }: { agent: Agent }) => {
     and it did so by being refused.
   */
   const spent = agent.status === 'revoked' || agent.status === 'broke';
+
+  /*
+    Being out of money is recoverable and being revoked is not, so only one of
+    them gets an offer to fix it. Raising a revoked agent's budget would mint an
+    allowance against a name that no longer resolves — the authority would
+    refuse the first signature, and the button would be a lie with a
+    transaction attached.
+  */
+  const [raising, setRaising] = useState(false);
+  const canRaise = agent.status === 'broke';
 
   const send = async () => {
     const prompt = draft.trim();
@@ -148,6 +172,18 @@ export const AgentThread = ({ agent }: { agent: Agent }) => {
             </p>
           ) : null}
 
+          {canRaise ? (
+            <div className="mb-2 flex items-center gap-3 rounded-xl border bg-card px-4 py-3">
+              <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
+                {nameOf(agent)} has spent what it was given. Raising its budget re-issues the allowance and it
+                carries on from where it stopped.
+              </p>
+              <Button size="sm" className="shrink-0" onClick={() => setRaising(true)}>
+                Raise budget
+              </Button>
+            </div>
+          ) : null}
+
           <div className="flex items-end gap-2 rounded-xl border bg-card p-2 pl-4 focus-within:border-ring">
             <Textarea
               rows={1}
@@ -194,6 +230,15 @@ export const AgentThread = ({ agent }: { agent: Agent }) => {
           </p>
         </div>
       </div>
+
+      {raising ? (
+        /*
+          Keyed on the agent so switching agents with it open cannot leave one
+          agent's number in another's form — the same reason the detail panel
+          keys its copy.
+        */
+        <EditDialog key={agent.id} agent={agent} state={state} open onClose={() => setRaising(false)} />
+      ) : null}
     </section>
   );
 };

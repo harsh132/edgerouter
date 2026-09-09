@@ -80,10 +80,21 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
     figure for what it spent, or the next attach would hand it back money it
     already used.
   */
+  /*
+    The authority's refusal, caught on the way past.
+
+    An agent that spends its last tinybar gets a 402 it cannot settle, and the
+    fetch throws — but pi catches that, reports "Connection error.", and the
+    real reason is gone. So the refusal is recorded when it happens, and the
+    outcome below trusts this over anything pi has to say.
+  */
+  let denied: BudgetExhausted | null = null;
+
   const fetch = payingFetch({
     signer: connection.signer,
     network: agent.network,
     maxAmountMinor: perCallCeiling(agent),
+    remainingMinor: BigInt(agent.budgetMinor) - BigInt(agent.spentMinor),
     onSpend: ({ costMinor, ms }) => {
       agent.spentMinor = (BigInt(agent.spentMinor) + costMinor).toString();
       const step: Step = {
@@ -96,6 +107,14 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
       task.steps.push(step);
       emit({ type: 'step', agentId: agent.id, step, spentMinor: agent.spentMinor });
       publish(runtime);
+    },
+    /*
+      Kept here rather than relied on from the throw. pi swallows the error and
+      substitutes its own text, so by the time the run ends the only evidence
+      that an agent ran out of money is this.
+    */
+    onRefusal: (refusal) => {
+      denied = refusal;
     },
   });
 
@@ -177,6 +196,10 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
     is therefore wrong, and wrong in the worst direction: a run that bought
     nothing and failed reported "finished" with an empty answer. Both places are
     checked, and the thrown case is kept because an abort still throws.
+
+    Neither place is trusted about *money*, though. pi rewrites a failing fetch
+    into "Connection error.", so an agent that ran out of budget accused the
+    network. The refusal recorded by the fetch itself is checked first.
   */
   let thrown: Error | null = null;
   try {
@@ -188,21 +211,67 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
   const failure = thrown?.message ?? pi.state.errorMessage;
   const stoppedByHand = thrown?.name === 'AbortError' || pi.signal?.aborted === true;
 
-  if (!failure) {
-    task.outcome = 'finished';
-    task.answer = task.steps.at(-1)?.text ?? '';
-    agent.status = 'done';
-  } else if (thrown instanceof BudgetExhausted || failure.includes('BudgetExhausted')) {
+  /*
+    The refusal wins over whatever pi called it.
+
+    `denied` is set by the fetch at the moment the authority said no, so it is
+    the only account of the failure that has not been through a layer that
+    rewrites errors. Checked first, and checked even when pi reported something
+    that looks like a network problem, because that is exactly what pi reports.
+  */
+  const refusal = denied ?? (thrown instanceof BudgetExhausted ? thrown : null);
+
+  if (refusal || (failure && failure.includes('BudgetExhausted'))) {
     /*
       Said in terms of money, because that is what happened. The difference
       between "spent its budget" and "was revoked" comes from the authority's
       own words, which name the node and the reason.
     */
-    const revoked = failure.includes('resolve');
-    task.outcome = revoked
-      ? 'stopped — its name no longer resolves, so the authority refused to sign'
-      : `stopped — its budget of ${formatAmount(agent.network, BigInt(agent.budgetMinor))} is spent`;
-    agent.status = revoked ? 'revoked' : 'broke';
+    const why = refusal?.reason ?? failure ?? '';
+
+    /*
+      Three ways to be refused, and they are not the same news. A revoked name
+      is somebody having stopped this agent; a spent budget is it having done
+      all it was funded to do; a quote above the per-call cap is neither, and
+      the agent still has money.
+    */
+    if (why.includes('resolve')) {
+      task.outcome = 'stopped — its name no longer resolves, so the authority refused to sign';
+      agent.status = 'revoked';
+    } else if (why.includes('per-call cap')) {
+      task.outcome = `stopped — one call was quoted above its per-call limit, so nothing was bought`;
+      agent.status = 'idle';
+    } else {
+      /*
+        What is actually left, not a round "budget spent".
+
+        An agent almost never lands on zero — it stops when the next call costs
+        more than the remainder, which is usually a small amount still sitting
+        there. Reporting the budget as spent when a tenth of a hbar remains is
+        the kind of small lie that makes someone go looking for the missing
+        money.
+      */
+      const left = BigInt(agent.budgetMinor) - BigInt(agent.spentMinor);
+      const budget = formatAmount(agent.network, BigInt(agent.budgetMinor));
+
+      /*
+        And what to do about it, because there is something.
+
+        A limit that stops an agent without saying it can be raised reads as a
+        dead end rather than a control. The budget is the user's number and
+        always was; the message should say so where they are already looking,
+        not leave them to discover an Edit button.
+      */
+      task.outcome =
+        left > 0n
+          ? `stopped — ${formatAmount(agent.network, left)} left of ${budget}, less than the next call costs. Raise its budget to carry on.`
+          : `stopped — it has spent its budget of ${budget}. Raise it to carry on.`;
+      agent.status = 'broke';
+    }
+  } else if (!failure) {
+    task.outcome = 'finished';
+    task.answer = task.steps.at(-1)?.text ?? '';
+    agent.status = 'done';
   } else if (stoppedByHand) {
     task.outcome = 'stopped by you';
     agent.status = 'stopped';
