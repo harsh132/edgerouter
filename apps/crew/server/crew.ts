@@ -34,6 +34,7 @@ import {
   openEnsSigner,
   revokeAgentName,
   registryOf,
+  setProfile,
   ROOT_NAME,
 } from '../../../packages/ens/src/index';
 import { load, save, type Agent, type Crew } from './store';
@@ -188,7 +189,15 @@ export const boot = async (options: { gate: string; network: string }): Promise<
  */
 export const hire = async (
   runtime: Runtime,
-  params: { label: string; brief: string; budgetMinor: bigint; model: string },
+  params: {
+    label: string;
+    brief: string;
+    budgetMinor: bigint;
+    model: string;
+    /** Drawn in the browser — a sigil, or whatever the user pointed at. */
+    avatar?: string;
+    header?: string;
+  },
 ): Promise<Agent> => {
   const label = params.label
     .trim()
@@ -230,6 +239,8 @@ export const hire = async (
     createdAt: Date.now(),
     status: 'idle',
     tasks: [],
+    ...(params.avatar ? { avatar: params.avatar } : {}),
+    ...(params.header ? { header: params.header } : {}),
   };
 
   if (runtime.naming) {
@@ -255,6 +266,28 @@ export const hire = async (
       agent.name = named.name;
       agent.ensParentRegistry = named.parentRegistry;
       agent.ensResolver = named.resolver;
+
+      /*
+        The picture goes on chain too, under the conventional ENS keys — so the
+        agent has a face in the ENS manager and anywhere else that resolves
+        names, not only in this app. Written after the name exists, and failing
+        separately: an agent with a name and no avatar works fine, and losing
+        the whole mint over a picture would be absurd.
+      */
+      try {
+        await setProfile(
+          { public: ens.public, wallet: ens.wallet },
+          {
+            resolver: named.resolver,
+            name: named.name,
+            description: agent.brief,
+            ...(agent.avatar ? { avatar: agent.avatar } : {}),
+            ...(agent.header ? { header: agent.header } : {}),
+          },
+        );
+      } catch (error) {
+        emit({ type: 'log', text: `${label}'s profile did not reach the chain: ${(error as Error).message}` });
+      }
     } catch (error) {
       emit({ type: 'log', text: `${label} has no ENS name: ${(error as Error).message}` });
     }
@@ -262,6 +295,100 @@ export const hire = async (
 
   runtime.crew.agents.push(agent);
   await attach(runtime, agent);
+  publish(runtime);
+  return agent;
+};
+
+/**
+ * Changes an agent after it exists.
+ *
+ * Everything here is editable except the one thing that cannot be: the label.
+ * It is half the ENS name, the name is the node the authority charges, and the
+ * guard checks that node before every signature — renaming would mean minting a
+ * second name and abandoning the first, which is a different operation with a
+ * different price, so it is not offered as an edit.
+ *
+ * A budget change re-mints the allowance, because the tree holds an amount and
+ * not a reference to this record. Lowering below what is already spent is
+ * refused rather than clamped: it reads as "spend no more", and silently
+ * turning it into "you have spent it all" would be a different instruction.
+ */
+export const update = async (
+  runtime: Runtime,
+  id: string,
+  changes: { brief?: string; model?: string; budgetMinor?: bigint; avatar?: string; header?: string },
+): Promise<Agent> => {
+  const agent = agentById(runtime, id);
+  if (agent.status === 'revoked') throw new Error(`${agent.label} has been revoked`);
+
+  if (changes.budgetMinor !== undefined && changes.budgetMinor !== BigInt(agent.budgetMinor)) {
+    const spent = BigInt(agent.spentMinor);
+    if (changes.budgetMinor < spent) {
+      throw new Error(
+        `${agent.label} has already spent ${formatAmount(agent.network, spent)}; a budget below that cannot be set`,
+      );
+    }
+
+    const promised = runtime.crew.agents
+      .filter((other) => other.id !== agent.id && other.status !== 'revoked')
+      .reduce((total, other) => total + (BigInt(other.budgetMinor) - BigInt(other.spentMinor)), 0n);
+    if (promised + (changes.budgetMinor - spent) > runtime.wallet.spendableMinor) {
+      throw new Error(
+        `the wallet can spend ${formatAmount(runtime.wallet.network, runtime.wallet.spendableMinor)}, and ` +
+          `${formatAmount(runtime.wallet.network, promised)} of that is already promised elsewhere`,
+      );
+    }
+
+    agent.budgetMinor = changes.budgetMinor.toString();
+
+    /*
+      The old allowance is revoked before the new one is minted. Leaving it in
+      place would mean an agent holding two capabilities and a limit that is the
+      sum of them — which is the one thing a budget must never quietly become.
+    */
+    runtime.connections.delete(agent.id);
+    try {
+      runtime.authority.revoke({ token: runtime.authority.rootToken, node: agent.name ?? agent.label });
+    } catch {
+      // Not in the tree — nothing to withdraw before re-minting.
+    }
+    if (BigInt(agent.budgetMinor) > spent) {
+      agent.status = agent.status === 'broke' ? 'idle' : agent.status;
+      await attach(runtime, agent);
+    } else {
+      agent.status = 'broke';
+    }
+  }
+
+  if (changes.brief !== undefined) agent.brief = changes.brief;
+  if (changes.model !== undefined) agent.model = changes.model;
+  if (changes.avatar !== undefined) agent.avatar = changes.avatar;
+  if (changes.header !== undefined) agent.header = changes.header;
+
+  /*
+    Only the keys that changed are written, and only when there is a name to
+    write them to. Each is a transaction, so rewriting an untouched avatar
+    because a description changed would be charging the user for nothing.
+  */
+  const profile = {
+    ...(changes.brief !== undefined ? { description: changes.brief } : {}),
+    ...(changes.avatar !== undefined ? { avatar: changes.avatar } : {}),
+    ...(changes.header !== undefined ? { header: changes.header } : {}),
+  };
+
+  if (agent.name && agent.ensResolver && Object.keys(profile).length > 0) {
+    emit({ type: 'log', text: `updating ${agent.name} …` });
+    try {
+      const ens = openEnsSigner();
+      await setProfile(
+        { public: ens.public, wallet: ens.wallet },
+        { resolver: agent.ensResolver as `0x${string}`, name: agent.name, ...profile },
+      );
+    } catch (error) {
+      emit({ type: 'log', text: `${agent.name} kept its old records: ${(error as Error).message}` });
+    }
+  }
+
   publish(runtime);
   return agent;
 };

@@ -62,6 +62,16 @@ export type Agent = {
   brief: string;
   /** Which model it buys from the gate. */
   model: string;
+  /**
+   * The agent's picture, and the banner behind it.
+   *
+   * A URL, an ipfs:// URI, or a data: URI — whatever the browser handed over.
+   * Held here as well as on chain because chain reads are slow and this file is
+   * what the roster renders from; the copy on chain is the one other people can
+   * see, and the two are written together.
+   */
+  avatar?: string;
+  header?: string;
   /** Where its name was minted, kept so revoking does not have to look it up. */
   ensParentRegistry?: string;
   ensResolver?: string;

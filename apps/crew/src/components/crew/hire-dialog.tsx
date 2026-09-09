@@ -19,7 +19,9 @@ import {
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { ProfileFields, ProfilePreview } from './profile-fields';
 import { toMinor } from '@/lib/format';
+import { sigilDataUri } from '@/lib/sigil';
 import { hire, type State } from '@/api';
 
 const Field = ({
@@ -47,6 +49,8 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
   const [brief, setBrief] = useState('');
   const [budget, setBudget] = useState('');
   const [model, setModel] = useState(state.models[0] ?? '');
+  const [avatar, setAvatar] = useState('');
+  const [header, setHeader] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -75,10 +79,20 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
         brief: brief.trim() || 'A helpful agent.',
         model,
         budgetMinor: budgetMinor.toString(),
+        /*
+          The sigil is resolved to an image here rather than left for the
+          runtime to draw, because the runtime cannot: the library builds its
+          output through a DOM element. That split is the right one anyway — the
+          page makes the picture, and the only process holding a key writes it.
+        */
+        avatar: avatar.trim() || sigilDataUri(label.trim().toLowerCase() || 'agent'),
+        ...(header.trim() ? { header: header.trim() } : {}),
       });
       setLabel('');
       setBrief('');
       setBudget('');
+      setAvatar('');
+      setHeader('');
       onClose();
     } catch (problem) {
       setError((problem as Error).message);
@@ -89,7 +103,7 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Hire an agent</DialogTitle>
           <DialogDescription>
@@ -98,6 +112,8 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
+          <ProfilePreview label={label} avatar={avatar} header={header} />
+
           <Field
             label="Name"
             htmlFor="label"
@@ -162,6 +178,8 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
               </SelectContent>
             </Select>
           </Field>
+
+          <ProfileFields avatar={avatar} header={header} onAvatar={setAvatar} onHeader={setHeader} />
 
           {error ? (
             <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive">

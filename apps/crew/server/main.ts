@@ -18,7 +18,7 @@
  */
 import { formatAmount } from '../../../packages/sdk/src/index';
 import { ROOT_NAME } from '../../../packages/ens/src/index';
-import { boot, hire, fire, agentById, type Runtime } from './crew';
+import { boot, hire, fire, update, agentById, type Runtime } from './crew';
 import { runTask, stop, isRunning } from './run';
 import { subscribe } from './events';
 import { MODELS } from './model';
@@ -139,6 +139,8 @@ Bun.serve({
         brief: string;
         budgetMinor: string;
         model: string;
+        avatar?: string;
+        header?: string;
       };
       try {
         const agent = await hire(runtime, {
@@ -146,6 +148,8 @@ Bun.serve({
           brief: body.brief,
           budgetMinor: BigInt(body.budgetMinor),
           model: body.model,
+          ...(body.avatar ? { avatar: body.avatar } : {}),
+          ...(body.header ? { header: body.header } : {}),
         });
         return json({ agent: agent.id });
       } catch (error) {
@@ -153,13 +157,30 @@ Bun.serve({
       }
     }
 
-    const match = /^\/api\/agents\/([^/]+)\/(task|stop|fire)$/.exec(path);
+    const match = /^\/api\/agents\/([^/]+)\/(task|stop|fire|edit)$/.exec(path);
     if (request.method === 'POST' && match) {
       const [, id, action] = match as unknown as [string, string, string];
       try {
         const agent = agentById(runtime, id);
 
         if (action === 'stop') return json({ stopped: stop(id) });
+        if (action === 'edit') {
+          const changes = (await request.json()) as {
+            brief?: string;
+            model?: string;
+            budgetMinor?: string;
+            avatar?: string;
+            header?: string;
+          };
+          await update(runtime, id, {
+            ...(changes.brief === undefined ? {} : { brief: changes.brief }),
+            ...(changes.model === undefined ? {} : { model: changes.model }),
+            ...(changes.budgetMinor === undefined ? {} : { budgetMinor: BigInt(changes.budgetMinor) }),
+            ...(changes.avatar === undefined ? {} : { avatar: changes.avatar }),
+            ...(changes.header === undefined ? {} : { header: changes.header }),
+          });
+          return json({ updated: true });
+        }
         if (action === 'fire') {
           await fire(runtime, id);
           return json({ fired: true });

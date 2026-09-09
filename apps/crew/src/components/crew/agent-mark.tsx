@@ -1,21 +1,23 @@
 /**
- * An agent's mark: a coloured blob with a state pip.
+ * An agent's mark: its picture, and a pip saying what it is doing.
  *
- * A blob rather than a face. These are budgets with names on them, and dressing
- * one as a colleague would be a claim the app cannot back — the pip is the only
- * thing here that asserts anything, and it asserts something true: whether this
- * agent is spending, out of money, or revoked.
+ * A custom image when it has one, otherwise the sigil its name draws. Never a
+ * face — these are budgets with names on them, and dressing one as a colleague
+ * would be a claim the app cannot back. The pip is the only thing here that
+ * asserts anything, and what it asserts is true: spending, out of money, or
+ * revoked.
  */
+import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
-import { hueOf, initialsOf } from '@/lib/format';
+import { sigilSvg } from '@/lib/sigil';
 import type { Agent } from '@/api';
 
 export type MarkSize = 'sm' | 'md' | 'lg';
 
 const BOX: Record<MarkSize, string> = {
-  sm: 'size-6 rounded-md text-[10px]',
-  md: 'size-9 rounded-lg text-xs',
-  lg: 'size-14 rounded-xl text-lg',
+  sm: 'size-6 rounded-md',
+  md: 'size-9 rounded-lg',
+  lg: 'size-14 rounded-xl',
 };
 
 export const AgentMark = ({
@@ -27,8 +29,15 @@ export const AgentMark = ({
   size?: MarkSize;
   className?: string;
 }) => {
-  const hue = hueOf(agent.label);
   const revoked = agent.status === 'revoked';
+
+  /*
+    Redrawn only when the name changes. Generating a sigil walks a symbol table
+    and builds DOM, and the roster re-renders on every event the runtime sends —
+    which, while an agent is working, is several a second.
+  */
+  const svg = useMemo(() => (agent.avatar ? null : sigilSvg(agent.label)), [agent.avatar, agent.label]);
+
   /*
     A pip only when there is something to say. An idle agent that has never run
     is the ordinary case and deserves no decoration; a dot that is always there
@@ -39,10 +48,22 @@ export const AgentMark = ({
   return (
     <div className={cn('relative shrink-0', className)}>
       <div
-        className={cn('grid place-items-center font-semibold text-black/80', BOX[size], revoked && 'brightness-50 grayscale')}
-        style={{ background: `linear-gradient(150deg, hsl(${hue} 80% 70%), hsl(${(hue + 36) % 360} 74% 58%))` }}
+        className={cn(
+          'overflow-hidden border bg-muted [&>svg]:size-full',
+          BOX[size],
+          revoked && 'brightness-50 grayscale',
+        )}
       >
-        {initialsOf(agent.label)}
+        {agent.avatar ? (
+          <img src={agent.avatar} alt="" className="size-full object-cover" />
+        ) : (
+          /*
+            The sigil library returns SVG source, not an element. It is our own
+            output from our own input — no user-supplied string reaches this —
+            and rendering it inline keeps it a vector that inherits the box.
+          */
+          <span className="block size-full" dangerouslySetInnerHTML={{ __html: svg! }} />
+        )}
       </div>
 
       {pip ? (

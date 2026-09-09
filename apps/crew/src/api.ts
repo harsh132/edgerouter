@@ -37,6 +37,9 @@ export type Agent = {
   spentMinor: string;
   budget: string;
   spent: string;
+  /** Its picture and banner. Also written to ENS, where others can see them. */
+  avatar?: string;
+  header?: string;
   account?: string;
   network: string;
   createdAt: number;
@@ -70,10 +73,28 @@ const post = async (path: string, body?: unknown): Promise<unknown> => {
   return payload;
 };
 
-export const hire = (agent: { label: string; brief: string; budgetMinor: string; model: string }) =>
-  post('/api/agents', agent);
+export const hire = (agent: {
+  label: string;
+  brief: string;
+  budgetMinor: string;
+  model: string;
+  avatar?: string;
+  header?: string;
+}) => post('/api/agents', agent);
 
 export const assign = (id: string, prompt: string) => post(`/api/agents/${id}/task`, { prompt });
+
+/**
+ * Changes an agent that already exists.
+ *
+ * Only the fields passed are touched — each one that reaches the chain is a
+ * transaction, so sending the whole agent back would charge for rewriting
+ * records that did not change.
+ */
+export const edit = (
+  id: string,
+  changes: { brief?: string; model?: string; budgetMinor?: string; avatar?: string; header?: string },
+) => post(`/api/agents/${id}/edit`, changes);
 export const halt = (id: string) => post(`/api/agents/${id}/stop`);
 export const fire = (id: string) => post(`/api/agents/${id}/fire`);
 

@@ -6,11 +6,13 @@
  * away.
  */
 import { useMemo, useState } from 'react';
+import { Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { AgentMark } from './agent-mark';
 import { FactList } from './fact-list';
 import { Ledger } from './ledger';
+import { EditDialog } from './edit-dialog';
 import { Section } from './section';
 import { SpendMeter } from './spend-meter';
 import { when } from '@/lib/format';
@@ -19,6 +21,7 @@ import { fire, type Agent, type State } from '@/api';
 
 export const AgentDetail = ({ agent, state }: { agent: Agent; state: State }) => {
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   /*
     The tail, newest first. An agent that has run all day has hundreds of steps
@@ -30,10 +33,19 @@ export const AgentDetail = ({ agent, state }: { agent: Agent; state: State }) =>
   const revoked = agent.status === 'revoked';
 
   return (
-    <aside className="flex flex-col gap-5 overflow-y-auto border-l bg-card p-5">
-      <div className="flex flex-col items-center gap-2 pt-2 text-center">
-        <AgentMark agent={agent} size="lg" />
-        <div className="text-sm font-semibold">{agent.label}</div>
+    <aside className="flex flex-col gap-5 overflow-y-auto border-l bg-card">
+      {/*
+        The banner, laid out the way ENS lays one out — the mark sitting over
+        its bottom edge — because that is where these two records are read from
+        by everyone who is not us.
+      */}
+      <div className="relative">
+        <div className="h-20 w-full bg-accent/30">
+          {agent.header ? <img src={agent.header} alt="" className="size-full object-cover" /> : null}
+        </div>
+        <div className="flex flex-col items-center gap-2 px-5 pb-1 text-center">
+          <AgentMark agent={agent} size="lg" className="-mt-7 rounded-xl ring-4 ring-card" />
+          <div className="text-sm font-semibold">{agent.label}</div>
         <div
           className={cn(
             'font-mono text-[11px] break-all',
@@ -41,9 +53,17 @@ export const AgentDetail = ({ agent, state }: { agent: Agent; state: State }) =>
           )}
         >
           {agent.name ?? (state.naming ? 'name could not be minted' : 'names are off on this chain')}
+          </div>
+
+          {agent.status !== 'revoked' ? (
+            <Button variant="outline" size="sm" className="mt-1 h-7 px-2.5 text-xs" onClick={() => setEditing(true)}>
+              <Pencil className="size-3" /> Edit
+            </Button>
+          ) : null}
         </div>
       </div>
 
+      <div className="flex flex-col gap-5 px-5 pb-5">
       <Section title="Budget" className="gap-2.5">
         <SpendMeter
           spentMinor={agent.spentMinor}
@@ -106,6 +126,15 @@ export const AgentDetail = ({ agent, state }: { agent: Agent; state: State }) =>
           </Button>
         )}
       </div>
+      </div>
+
+      {editing ? (
+        /*
+          Keyed on the agent, so switching agents while it is open rebuilds the
+          form rather than leaving one agent's description in another's fields.
+        */
+        <EditDialog key={agent.id} agent={agent} state={state} open onClose={() => setEditing(false)} />
+      ) : null}
     </aside>
   );
 };

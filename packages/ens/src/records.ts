@@ -71,6 +71,22 @@ export const RECORD = {
   expires: 'er.expires',
 } as const;
 
+/**
+ * The keys everyone else already reads.
+ *
+ * Deliberately not namespaced, unlike `RECORD` above. `avatar`, `header` and
+ * `description` are the conventional ENS profile keys, so an agent named here
+ * shows up with its picture in the ENS manager and anywhere else that resolves
+ * names — which is the whole argument for these being real names rather than
+ * rows in our database. A namespaced `er.avatar` would be correct, private, and
+ * invisible.
+ */
+export const PROFILE = {
+  avatar: 'avatar',
+  header: 'header',
+  description: 'description',
+} as const;
+
 export const permissionedResolverAbi = parseAbi([
   'function setAddress(bytes name, uint256 coinType, bytes addressBytes)',
   'function setText(bytes name, string key, string value)',
@@ -155,6 +171,41 @@ export const setText = async (
   });
   await clients.public.waitForTransactionReceipt({ hash });
   return hash;
+};
+
+/**
+ * Writes the parts of an agent anyone can see.
+ *
+ * Separate from `describeAgent` because these change and that does not. A name
+ * is minted once with a grant and a gate; its picture and its description are
+ * edited afterwards, possibly often, and each edit is a transaction the caller
+ * chose to pay for. Only the keys actually passed are written, so editing a
+ * description does not rewrite an avatar.
+ */
+export const setProfile = async (
+  clients: Clients,
+  params: {
+    resolver: Address;
+    name: string;
+    /** A URL, an ipfs:// URI, or a data: URI. ENS clients accept all three. */
+    avatar?: string;
+    header?: string;
+    description?: string;
+  },
+): Promise<Hash[]> => {
+  const entries: [string, string][] = [
+    ...(params.avatar === undefined ? [] : ([[PROFILE.avatar, params.avatar]] as [string, string][])),
+    ...(params.header === undefined ? [] : ([[PROFILE.header, params.header]] as [string, string][])),
+    ...(params.description === undefined
+      ? []
+      : ([[PROFILE.description, params.description]] as [string, string][])),
+  ];
+
+  const hashes: Hash[] = [];
+  for (const [key, value] of entries) {
+    hashes.push(await setText(clients, { resolver: params.resolver, name: params.name, key, value }));
+  }
+  return hashes;
 };
 
 /**
