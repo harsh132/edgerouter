@@ -8,7 +8,14 @@
  * the second run is a read.
  */
 import { formatEther } from 'viem';
-import { ENS_APP, ensureSessionName, openEnsSigner, sessionLabelFor, createEnsClient, RECORD } from './src/index';
+import {
+  ENS_APP,
+  ensureSessionName,
+  openEnsSigner,
+  parentOf,
+  sessionLabelFor,
+  createEnsClient,
+} from './src/index';
 
 const at = process.argv.indexOf('--seed');
 const seed = at >= 0 ? (process.argv[at + 1] ?? '') : '';
@@ -33,5 +40,5 @@ say(`  registry   ${session.registry}`);
 
 const ens = createEnsClient();
 say(`\n  resolves   ${(await ens.addressOf(session.name)) ?? 'nothing'}`);
-say(`  parent     ${await ens.textOf(session.name, RECORD.parent)}`);
+say(`  parent     ${parentOf(session.name) ?? 'none — this is a root'}`);
 say(`\n  app        ${ENS_APP}\n`);

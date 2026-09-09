@@ -9,7 +9,7 @@
  * is actually being minted.
  */
 import { formatUnits } from 'viem';
-import { ENS, createEnsClient, mintAgentName, openEnsSigner, registryAbi, RECORD } from './src/index';
+import { ENS, createEnsClient, mintAgentName, openEnsSigner, parentOf, registryAbi, RECORD } from './src/index';
 
 const label = process.argv[2];
 if (!label) {
@@ -81,4 +81,4 @@ say(`  registry   ${agent.registry === '0x00000000000000000000000000000000000000
 const ens = createEnsClient();
 say(`\n  resolves to  ${(await ens.addressOf(agent.name)) ?? 'nothing yet'}`);
 if (budget) say(`  granted      ${formatUnits(BigInt(budget), 8)} (${await ens.textOf(agent.name, RECORD.granted)} minor)`);
-say(`  parent       ${await ens.textOf(agent.name, RECORD.parent)}`);
+say(`  parent       ${parentOf(agent.name) ?? 'none — this is a root'}`);

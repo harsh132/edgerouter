@@ -21,10 +21,11 @@
  * The address record is the point: it is the account that actually pays, so a
  * name resolving to it names something that acts rather than something that
  * merely exists. The text records carry what the delegation tree knows at mint
- * time — what was granted, and by whom — so an agent's
+ * time and the name itself cannot say — what was granted — so an agent's
  * allowance is legible to anything that can resolve a name, without access to
- * the authority that holds the money. What is *left* of that allowance is not
- * here, because only the authority knows it.
+ * the authority that holds the money. Who granted it is not a record, because
+ * the name already spells that out; see `parentOf`. What is *left* of that
+ * allowance is not here either, because only the authority knows it.
  */
 import {
   concat,
@@ -73,8 +74,19 @@ export const RECORD = {
   granted: 'er.granted',
   /** The asset that budget is denominated in — a CAIP-19 identifier. */
   asset: 'er.asset',
-  /** The name that delegated to this one. Empty at the root. */
-  parent: 'er.parent',
+  /*
+    Who delegated to this name is not written here either.
+
+    There was an `er.parent` key holding the delegating name, and it was a copy
+    of something the name already says: `researcher.session-x.edgerouter.eth`
+    was minted in the registry `session-x.edgerouter.eth` owns, so its parent is
+    the name with its first label removed — the exact string the record held.
+    The hierarchy is the delegation chain, and unlike a text record it cannot
+    disagree with itself: a name's position in the tree is enforced by the
+    registry that holds it, while a record is a claim written alongside.
+
+    See `parentOf` in `agent.ts`, which is a string split and costs nothing.
+  */
   /** Unix seconds after which the allowance is dead. */
   expires: 'er.expires',
 } as const;
@@ -250,7 +262,6 @@ export const describeAgent = async (
     address: Address;
     grantedMinor?: bigint;
     asset?: string;
-    parent?: string;
     expiresAt?: number;
   },
 ): Promise<{ address: Hash; texts: Hash[] }> => {
@@ -265,7 +276,6 @@ export const describeAgent = async (
       ? []
       : ([[RECORD.granted, params.grantedMinor.toString()]] as [string, string][])),
     ...(params.asset ? ([[RECORD.asset, params.asset]] as [string, string][]) : []),
-    ...(params.parent ? ([[RECORD.parent, params.parent]] as [string, string][]) : []),
     ...(params.expiresAt
       ? ([[RECORD.expires, String(Math.floor(params.expiresAt / 1000))]] as [string, string][])
       : []),

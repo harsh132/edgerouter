@@ -59,6 +59,22 @@ export const labelIdOf = (label: string): bigint => BigInt(keccak256(stringToHex
  */
 export const canonicalIdOf = (label: string): bigint => labelIdOf(label) & ~((1n << 32n) - 1n);
 
+/**
+ * Who delegated to a name.
+ *
+ * A string split, because the hierarchy already holds this: a name is minted in
+ * the registry its parent owns, so the parent is the name with its first label
+ * removed. There is nothing to fetch, nothing to keep in sync, and no way for
+ * the answer to disagree with the chain — which is more than a text record
+ * saying the same thing could offer.
+ *
+ * Returns null at a name with nowhere above it to point.
+ */
+export const parentOf = (name: string): string | null => {
+  const labels = ensName(name).split('.');
+  return labels.length > 2 ? labels.slice(1).join('.') : null;
+};
+
 /** Far enough out that an agent does not expire mid-task. */
 const DEFAULT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -180,7 +196,6 @@ export const mintAgentName = async (
     address: params.address ?? owner,
     ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
     ...(params.asset ? { asset: params.asset } : {}),
-    parent: ensName(params.parent),
     expiresAt,
   });
 
