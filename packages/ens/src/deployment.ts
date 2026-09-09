@@ -69,6 +69,27 @@ export const ENS = {
 } as const satisfies Record<string, Address>;
 
 /**
+ * Our own contract, kept apart from the deployment's.
+ *
+ * Everything in `ENS` above came from the event's published table. This one was
+ * compiled from `contracts/Batch7702.sol` and deployed by
+ * `deploy-batcher.ts` — the code an account runs when an EIP-7702
+ * authorization makes a mint one transaction instead of seven.
+ *
+ * A constant rather than configuration, because it is a public address on a
+ * public chain and nothing about it is per-install. `ENS_BATCHER` overrides it
+ * for anyone who would rather run their own, and `ENS_BATCHER=off` turns
+ * batching off; unset, batching works out of the box.
+ *
+ * Do not point an account at a delegate that is not this one without reading
+ * `Batch7702.sol` first. A delegated account has code, and ENSv2 mints names
+ * with `_safeMint` — a delegate lacking `onERC1155Received` leaves the account
+ * unable to be given a name at all. That is not a hypothetical; the first
+ * version of this contract had exactly that hole.
+ */
+export const BATCH_7702 = getAddress('0x99ce6fd1e6bf225c6b006f02fabb7c2eecb83bbd');
+
+/**
  * Where a human looks at what this code did.
  *
  * Worth keeping beside the addresses: a registration that succeeded on chain

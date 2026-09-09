@@ -6,5 +6,8 @@
   "main": "src/index.ts",
   "dependencies": {
     "viem": "^2.48.11"
+  },
+  "devDependencies": {
+    "solc": "^0.8.36"
   }
 }

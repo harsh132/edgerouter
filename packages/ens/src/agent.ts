@@ -33,10 +33,12 @@ import {
   type PublicClient,
   type WalletClient,
 } from 'viem';
+import { encodeFunctionData } from 'viem';
 import { registryAbi } from './abi';
+import { sendCalls, type Call } from './batch';
 import { ensName } from './client';
 import { ALL_ROLES, deployRegistry, deployResolver } from './deploy';
-import { clearAddress, describeAgent } from './records';
+import { clearAddress, describeAgentCalls } from './records';
 
 type Clients = { public: PublicClient; wallet: WalletClient };
 
@@ -127,7 +129,6 @@ export const mintAgentName = async (
 
   const name = `${label}.${ensName(params.parent)}`;
   const account = clients.wallet.account!;
-  const chain = clients.wallet.chain!;
   const owner = params.owner;
   const expiresAt = params.expiresAt ?? Date.now() + DEFAULT_TTL_MS;
 
@@ -147,24 +148,35 @@ export const mintAgentName = async (
     ? (await deployRegistry(clients, { name, owner, version: 1n })).address
     : ('0x0000000000000000000000000000000000000000' as Address);
 
-  let registerHash: Hash | null = null;
+  const registerArgs = [
+    label,
+    owner,
+    registry,
+    resolver,
+    ALL_ROLES,
+    BigInt(Math.floor(expiresAt / 1000)),
+  ] as const;
+
+  /*
+    Registration is collected rather than sent, so it can travel with the
+    records in one transaction. The simulation still runs first and is still the
+    thing that catches a taken name — it is a read, it costs nothing, and
+    without it the recovery below would have to distinguish "already ours" from
+    every other revert by parsing a failed receipt.
+  */
+  let registerCall: Call | null = null;
   try {
-    const { request } = await clients.public.simulateContract({
+    await clients.public.simulateContract({
       address: params.parentRegistry,
       abi: registryAbi,
       functionName: 'register',
-      args: [
-        label,
-        owner,
-        registry,
-        resolver,
-        ALL_ROLES,
-        BigInt(Math.floor(expiresAt / 1000)),
-      ],
+      args: registerArgs,
       account,
     });
-    registerHash = await clients.wallet.writeContract(request);
-    await clients.public.waitForTransactionReceipt({ hash: registerHash });
+    registerCall = {
+      to: params.parentRegistry,
+      data: encodeFunctionData({ abi: registryAbi, functionName: 'register', args: registerArgs }),
+    };
   } catch (error) {
     /*
       A name this account already minted is not an error — re-running a session
@@ -190,14 +202,22 @@ export const mintAgentName = async (
     }
   }
 
-  await describeAgent(clients, {
-    resolver,
-    name,
-    address: params.address ?? owner,
-    ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
-    ...(params.asset ? { asset: params.asset } : {}),
-    expiresAt,
-  });
+  /*
+    The whole mint, in one list: register the name, point it at an address, say
+    what it was granted. Batched this is a single receipt and an all-or-nothing
+    outcome; unbatched it is exactly the sequence it always was.
+  */
+  const hashes = await sendCalls(clients, [
+    ...(registerCall ? [registerCall] : []),
+    ...describeAgentCalls({
+      resolver,
+      name,
+      address: params.address ?? owner,
+      ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
+      ...(params.asset ? { asset: params.asset } : {}),
+      expiresAt,
+    }),
+  ]);
 
   return {
     name,
@@ -205,7 +225,12 @@ export const mintAgentName = async (
     parentRegistry: params.parentRegistry,
     registry,
     resolver,
-    registerHash,
+    /*
+      The transaction the registration went out in — which, when batched, is
+      also the one that wrote every record. Null when the name already existed,
+      which is not a failure and never was.
+    */
+    registerHash: registerCall ? (hashes[0] ?? null) : null,
   };
 };
 
@@ -234,6 +259,12 @@ export const mintAgentName = async (
  *
  * The order matters. Records first, because that is the half that stops the
  * spending; if the second write fails, the allowance is still revoked.
+ *
+ * Which is why this is the one sequence in this file that is deliberately *not*
+ * batched. Atomicity is the wrong property here: a batch whose `unregister`
+ * reverts would roll back the address clear too, and an agent nobody managed to
+ * revoke is a worse outcome than a name left registered with nothing behind
+ * it.
  *
  * This is the public half of what the authority does when it empties a node.
  * The authority's half is immediate and private; this one is verifiable by

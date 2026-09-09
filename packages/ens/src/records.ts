@@ -36,8 +36,9 @@ import {
   type PublicClient,
   type WalletClient,
 } from 'viem';
-import { parseAbi } from 'viem';
+import { encodeFunctionData, parseAbi } from 'viem';
 import { ensName } from './client';
+import { sendCalls, type Call } from './batch';
 
 /** Ethereum's SLIP-44 coin type. What `addr(name)` resolves to. */
 export const ETH_COIN_TYPE = 60n;
@@ -140,6 +141,47 @@ export const dnsEncode = (name: string): `0x${string}` =>
 
 type Clients = { public: PublicClient; wallet: WalletClient };
 
+/*
+  Every write below exists twice: as a call that can be collected, and as a
+  function that sends one immediately.
+
+  The split is what lets a mint become a single transaction. A record write is
+  just an address and some calldata until somebody decides how to deliver it,
+  and once several of them are values rather than actions, sending them together
+  is a choice the caller makes rather than a rewrite of everything that writes
+  records. `sendCalls` then batches or falls back, and neither of these builders
+  needs to know which happened.
+*/
+
+/** The call that points a name at the address acting for it. */
+export const addressCall = (params: {
+  resolver: Address;
+  name: string;
+  address: Address | '0x';
+  coinType?: bigint;
+}): Call => ({
+  to: params.resolver,
+  data: encodeFunctionData({
+    abi: permissionedResolverAbi,
+    functionName: 'setAddress',
+    args: [
+      dnsEncode(params.name),
+      params.coinType ?? ETH_COIN_TYPE,
+      params.address === '0x' ? '0x' : (params.address.toLowerCase() as `0x${string}`),
+    ],
+  }),
+});
+
+/** The call that writes one text record. */
+export const textCall = (params: { resolver: Address; name: string; key: string; value: string }): Call => ({
+  to: params.resolver,
+  data: encodeFunctionData({
+    abi: permissionedResolverAbi,
+    functionName: 'setText',
+    args: [dnsEncode(params.name), params.key, params.value],
+  }),
+});
+
 /** Points a name at the address that acts for it. */
 export const setAddress = async (
   clients: Clients,
@@ -239,52 +281,56 @@ export const setProfile = async (
       : ([[PROFILE.description, params.description]] as [string, string][])),
   ];
 
-  const hashes: Hash[] = [];
-  for (const [key, value] of entries) {
-    hashes.push(await setText(clients, { resolver: params.resolver, name: params.name, key, value }));
-  }
-  return hashes;
+  return sendCalls(
+    clients,
+    entries.map(([key, value]) => textCall({ resolver: params.resolver, name: params.name, key, value })),
+  );
 };
+
+type AgentRecords = {
+  resolver: Address;
+  name: string;
+  address: Address;
+  grantedMinor?: bigint;
+  asset?: string;
+  expiresAt?: number;
+};
+
+/** The text records a mint writes, in the order they are written. */
+const textEntriesOf = (params: AgentRecords): [string, string][] => [
+  ...(params.grantedMinor === undefined
+    ? []
+    : ([[RECORD.granted, params.grantedMinor.toString()]] as [string, string][])),
+  ...(params.asset ? ([[RECORD.asset, params.asset]] as [string, string][]) : []),
+  ...(params.expiresAt
+    ? ([[RECORD.expires, String(Math.floor(params.expiresAt / 1000))]] as [string, string][])
+    : []),
+];
 
 /**
- * Writes an agent's whole record in one pass.
+ * The calls an agent's whole record is made of.
  *
- * Sequential rather than batched, because each is its own transaction on this
- * deployment and a partial write is legible: a name with an address and no
- * grant is an agent that exists and has been given nothing, which is a true
- * statement about a failed mint.
+ * Values rather than transactions, so `mintAgentName` can put its `register` in
+ * front of them and hand the entire mint to one transaction. The address record
+ * comes first because it is the one that matters — a name that resolves is what
+ * the guard checks — and inside a batch the order is now the only thing that
+ * distinguishes them, since either all of it lands or none of it does.
  */
-export const describeAgent = async (
-  clients: Clients,
-  params: {
-    resolver: Address;
-    name: string;
-    address: Address;
-    grantedMinor?: bigint;
-    asset?: string;
-    expiresAt?: number;
-  },
-): Promise<{ address: Hash; texts: Hash[] }> => {
-  const address = await setAddress(clients, {
-    resolver: params.resolver,
-    name: params.name,
-    address: params.address,
-  });
+export const describeAgentCalls = (params: AgentRecords): Call[] => [
+  addressCall({ resolver: params.resolver, name: params.name, address: params.address }),
+  ...textEntriesOf(params).map(([key, value]) =>
+    textCall({ resolver: params.resolver, name: params.name, key, value }),
+  ),
+];
 
-  const entries: [string, string][] = [
-    ...(params.grantedMinor === undefined
-      ? []
-      : ([[RECORD.granted, params.grantedMinor.toString()]] as [string, string][])),
-    ...(params.asset ? ([[RECORD.asset, params.asset]] as [string, string][]) : []),
-    ...(params.expiresAt
-      ? ([[RECORD.expires, String(Math.floor(params.expiresAt / 1000))]] as [string, string][])
-      : []),
-  ];
-
-  const texts: Hash[] = [];
-  for (const [key, value] of entries) {
-    texts.push(await setText(clients, { resolver: params.resolver, name: params.name, key, value }));
-  }
-
-  return { address, texts };
-};
+/**
+ * Writes an agent's whole record.
+ *
+ * One transaction where the account is delegated, and one per record where it
+ * is not. The partial write this used to defend as "legible" turned out to be
+ * the expensive failure rather than an honest one: interrupted between the
+ * address and the records, it left a name registered, resolving to nothing,
+ * invisible to the app and impossible to mint again.
+ */
+export const describeAgent = async (clients: Clients, params: AgentRecords): Promise<Hash[]> =>
+  sendCalls(clients, describeAgentCalls(params));

@@ -13,6 +13,7 @@ export * from './abi';
 export * from './register';
 export * from './wallet';
 export * from './deploy';
+export * from './batch';
 export * from './records';
 export * from './agent';
 export * from './guard';

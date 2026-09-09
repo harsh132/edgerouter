@@ -64,7 +64,7 @@ const described = await describeAgent(clients, {
   address: signer.address,
 });
 say(`
-  setAddress      ${described.address}`);
+  setAddress      ${described[0] ?? 'nothing to write'}`);
 
 /*
   Read back through the hierarchy rather than trusting the receipts: the calls
