@@ -25,6 +25,7 @@ import { formatAmount } from '../../../packages/sdk/src/index';
 import { modelFor } from './model';
 import { payingFetch, BudgetExhausted } from './paying-fetch';
 import { connectionFor, publish, type Runtime } from './crew';
+import { toolsFor } from './tools';
 import { emit } from './events';
 import type { Agent, Step, Task } from './store';
 
@@ -128,10 +129,20 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
         agent.brief.trim(),
         '',
         `You are ${agent.name ?? agent.label}, an autonomous agent.`,
-        'Every reply you generate is paid for out of a budget you cannot raise.',
-        'Work in as few steps as you can, and stop when the task is done.',
+        'Every reply you generate is paid for out of a budget you cannot raise,',
+        'and every tool call is a step you pay for too. Work in as few steps as',
+        'you can, and stop when the task is done.',
+        '',
+        'You have a workspace of your own. Files you write there persist between',
+        'tasks, and nothing outside it is reachable. When a task produces',
+        'something worth keeping, write it to a file rather than only saying it.',
       ].join('\n'),
       model,
+      /*
+        Bound to this agent, so the workspace is captured when the tools are
+        built rather than travelling as an argument the model could set.
+      */
+      tools: toolsFor(agent.label),
     } as never,
   });
 
@@ -148,11 +159,13 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
     const message = event.message as { role?: string; content?: unknown };
     if (message.role !== 'assistant') return;
 
-    const text = textOf(message.content);
     const step = task.steps[completed];
     completed += 1;
     if (!step) return;
-    step.text = text;
+
+    step.text = textOf(message.content);
+    const tools = toolsOf(message.content);
+    if (tools.length > 0) step.tools = tools;
     emit({ type: 'step', agentId: agent.id, step, spentMinor: agent.spentMinor });
   });
 
@@ -207,6 +220,17 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
   }
 
   return task;
+};
+
+/** Which tools the model asked for, in the order it asked. */
+const toolsOf = (content: unknown): string[] => {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter(
+      (block): block is { type: string; name: string } =>
+        Boolean(block) && typeof block === 'object' && (block as { type?: string }).type === 'toolCall',
+    )
+    .map((block) => block.name);
 };
 
 /** Assistant content is blocks or a string, depending on the provider. */

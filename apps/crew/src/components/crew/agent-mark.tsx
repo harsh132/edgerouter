@@ -48,7 +48,7 @@ export const AgentMark = ({
       {pip ? (
         <span
           className={cn(
-            'absolute -right-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-sidebar',
+            'absolute -right-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-card',
             agent.running && 'crew-breathe bg-primary',
             !agent.running && agent.status === 'broke' && 'bg-chart-1',
             revoked && 'bg-destructive',

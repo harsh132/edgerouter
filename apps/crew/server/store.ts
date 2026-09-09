@@ -24,8 +24,17 @@ export type AgentStatus = 'idle' | 'running' | 'done' | 'stopped' | 'broke' | 'r
 export type Step = {
   n: number;
   at: number;
-  /** What the model said this step. */
+  /** What the model said this step. Empty when the step only called tools. */
   text: string;
+  /**
+   * Tools the model asked for on this step, if any.
+   *
+   * A step that only calls tools produces no text, and rendering it as an empty
+   * message makes a working agent look stuck. Naming what it reached for is
+   * both more honest and more interesting: this is the step where it wrote the
+   * file, and it cost the same as any other.
+   */
+  tools?: string[];
   /** Smallest units paid for this step, as a string because JSON has no bigint. */
   costMinor: string;
   /** Milliseconds the call took, signing included. */

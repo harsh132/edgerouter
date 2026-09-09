@@ -7,7 +7,15 @@
  */
 import { useEffect, useRef, useState } from 'react';
 
-export type Step = { n: number; at: number; text: string; costMinor: string; ms: number };
+export type Step = {
+  n: number;
+  at: number;
+  text: string;
+  /** Present when the step called tools instead of, or as well as, speaking. */
+  tools?: string[];
+  costMinor: string;
+  ms: number;
+};
 
 export type Task = {
   id: string;

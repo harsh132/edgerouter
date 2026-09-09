@@ -78,7 +78,7 @@ export const App = () => {
 
       {agent ? <AgentThread agent={agent} /> : <NoAgents root={state.root} onHire={() => setHiring(true)} />}
 
-      {agent ? <AgentDetail agent={agent} state={state} /> : <aside className="border-l bg-sidebar" />}
+      {agent ? <AgentDetail agent={agent} state={state} /> : <aside className="border-l bg-card" />}
 
       <HireDialog state={state} open={hiring} onClose={() => setHiring(false)} />
     </div>

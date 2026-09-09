@@ -23,7 +23,16 @@ export const AgentRail = ({
   /** The chain's last word — minting, clearing. The only place it is visible. */
   note?: string;
 }) => (
-  <aside className="flex min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground">
+  /*
+    `bg-card`, not `bg-sidebar`.
+
+    This theme defines --sidebar as exactly --background, so a rail painted with
+    its own token is the same colour as the page — and a column holding one
+    agent then reads as an empty area where something failed to render rather
+    than as a panel. Card is the theme's own raised surface, so the panels
+    separate without inventing a colour the palette does not have.
+  */
+  <aside className="flex min-h-0 flex-col border-r bg-card text-card-foreground">
     <header className="flex items-center gap-2 px-4 py-3">
       <h1 className="flex-1 text-sm font-semibold tracking-tight">Crew</h1>
       <Button variant="ghost" size="icon" className="size-7" onClick={onHire} title="Hire an agent">

@@ -30,7 +30,7 @@ export const AgentDetail = ({ agent, state }: { agent: Agent; state: State }) =>
   const revoked = agent.status === 'revoked';
 
   return (
-    <aside className="flex flex-col gap-5 overflow-y-auto border-l bg-sidebar p-5">
+    <aside className="flex flex-col gap-5 overflow-y-auto border-l bg-card p-5">
       <div className="flex flex-col items-center gap-2 pt-2 text-center">
         <AgentMark agent={agent} size="lg" />
         <div className="text-sm font-semibold">{agent.label}</div>

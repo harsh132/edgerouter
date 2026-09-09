@@ -9,6 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { AgentMark } from './agent-mark';
 import { Receipt } from './receipt';
+import { ToolCall } from './tool-call';
 import { Typing } from './typing';
 import { when } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -29,7 +30,13 @@ const Bubble = ({ from, children }: { from: 'you' | 'them'; children: string }) 
 
 const StepView = ({ step, network }: { step: Step; network: string }) => (
   <>
-    <Bubble from="them">{step.text || '…'}</Bubble>
+    {/*
+      A step can speak, call tools, or do both. Only the empty case is a lie
+      worth avoiding: a step still in flight has neither yet, and an ellipsis
+      says so honestly.
+    */}
+    {step.tools?.length ? <ToolCall tools={step.tools} /> : null}
+    {step.text || !step.tools?.length ? <Bubble from="them">{step.text || '…'}</Bubble> : null}
     <Receipt network={network} costMinor={step.costMinor} ms={step.ms} className="-mt-1 ml-1 self-start" />
   </>
 );
