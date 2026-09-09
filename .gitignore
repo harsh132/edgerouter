@@ -14,3 +14,4 @@ packages/*/src/**/*.d.ts
 
 # Built plugin tarball. Stable name, rebuilt by `npm run pack`.
 packages/dsh/*.tgz
+apps/crew/dist/

@@ -1,0 +1,762 @@
+/*
+  Dark by default, and deliberately so.
+
+  The whole surface is a room with several workers in it and one shared wallet.
+  Dark keeps the colour budget for the two things that carry meaning: an agent's
+  identity, which is its blob, and its money, which is the only thing that ever
+  goes red.
+*/
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0b0e;
+  --rail: #111116;
+  --panel: #121218;
+  --raised: #1a1a22;
+  --line: #24242e;
+  --line-soft: #1c1c24;
+
+  --ink: #ececf1;
+  --ink-dim: #a1a1ae;
+  --ink-faint: #6b6b7a;
+
+  --accent: #7c5cff;
+  --good: #35c17e;
+  --warn: #e0a33a;
+  --bad: #f0555f;
+
+  --bubble-you: #26262f;
+  --bubble-them: #17171e;
+
+  --radius: 14px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 11px;
+  width: 100%;
+  outline: none;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 68px;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------------------------ shell */
+
+.app {
+  display: grid;
+  grid-template-columns: 288px minmax(0, 1fr) 320px;
+  height: 100%;
+}
+
+.rail {
+  background: var(--rail);
+  border-right: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 14px 10px;
+}
+
+.rail-title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  flex: 1;
+}
+
+.rail-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail-foot {
+  border-top: 1px solid var(--line-soft);
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ------------------------------------------------------------- agent row */
+
+.row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 9px 8px;
+  border-radius: 11px;
+  text-align: left;
+  width: 100%;
+}
+
+.row:hover {
+  background: #ffffff08;
+}
+
+.row[data-active='true'] {
+  background: #ffffff0f;
+}
+
+.row-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.row-name {
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-when {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink-faint);
+  flex: none;
+}
+
+.row-sub {
+  font-size: 12px;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row[data-revoked='true'] .row-name,
+.row[data-revoked='true'] .row-sub {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+  text-decoration-color: #ffffff33;
+}
+
+/*
+  The blob. An agent's only decoration, and it does real work: colour derived
+  from the name means the same agent is the same colour everywhere, so the rail,
+  the thread header and the ledger all agree without anyone storing a swatch.
+*/
+.blob {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 650;
+  color: #0b0b0e;
+  flex: none;
+  position: relative;
+}
+
+.blob[data-size='sm'] {
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+  font-size: 10px;
+}
+
+.blob[data-size='lg'] {
+  width: 52px;
+  height: 52px;
+  border-radius: 18px;
+  font-size: 19px;
+}
+
+.blob[data-dim='true'] {
+  filter: grayscale(1) brightness(0.6);
+}
+
+/* The working pulse. Only ever on while money is actually moving. */
+.pip {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2.5px solid var(--rail);
+  background: var(--good);
+}
+
+.pip[data-state='running'] {
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
+.pip[data-state='broke'] {
+  background: var(--warn);
+}
+
+.pip[data-state='revoked'] {
+  background: var(--bad);
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+/* ----------------------------------------------------------------- thread */
+
+.thread {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.thread-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.thread-head-name {
+  font-weight: 600;
+}
+
+.thread-head-sub {
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+}
+
+.thread-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px 18px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stamp {
+  align-self: center;
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin: 6px 0;
+}
+
+.bubble {
+  max-width: 78%;
+  padding: 11px 14px;
+  border-radius: 18px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bubble[data-from='you'] {
+  align-self: flex-end;
+  background: var(--bubble-you);
+  border-bottom-right-radius: 6px;
+}
+
+.bubble[data-from='them'] {
+  align-self: flex-start;
+  background: var(--bubble-them);
+  border: 1px solid var(--line-soft);
+  border-bottom-left-radius: 6px;
+}
+
+/*
+  What the reply cost, attached to the reply.
+
+  This is the one thing the app is really about, so it sits on the message
+  rather than in a sidebar total: every bubble on the left was bought, and the
+  price is right there under it.
+*/
+.receipt {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  margin: -6px 0 2px 4px;
+}
+
+.receipt b {
+  color: var(--ink-dim);
+  font-weight: 550;
+}
+
+.outcome {
+  align-self: center;
+  font-size: 12px;
+  color: var(--ink-dim);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 13px;
+  margin: 6px 0;
+}
+
+.outcome[data-bad='true'] {
+  color: #ffd4d7;
+  border-color: #4a2027;
+  background: #2a1519;
+}
+
+.thinking {
+  align-self: flex-start;
+  display: flex;
+  gap: 4px;
+  padding: 12px 15px;
+}
+
+.thinking i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  animation: bounce 1.2s infinite;
+}
+
+.thinking i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* -------------------------------------------------------------- composer */
+
+.composer {
+  padding: 12px 18px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.composer-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 6px 6px 6px 16px;
+}
+
+.composer-box:focus-within {
+  border-color: #3a3a48;
+}
+
+.composer textarea {
+  border: none;
+  background: none;
+  padding: 8px 0;
+  min-height: 24px;
+  max-height: 160px;
+}
+
+.send {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--bg);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.send:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.send[data-stop='true'] {
+  background: var(--bad);
+  color: #fff;
+}
+
+/* ---------------------------------------------------------------- detail */
+
+.detail {
+  background: var(--panel);
+  border-left: 1px solid var(--line-soft);
+  overflow-y: auto;
+  padding: 18px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.detail-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  text-align: center;
+  padding: 6px 0 2px;
+}
+
+.ens {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+
+.ens[data-none='true'] {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+}
+
+/*
+  Spend against limit. The bar is the point of the panel — an agent's budget is
+  the only number here that can stop it working, so it gets the space.
+*/
+.meter {
+  height: 7px;
+  border-radius: 4px;
+  background: #ffffff10;
+  overflow: hidden;
+}
+
+.meter i {
+  display: block;
+  height: 100%;
+  background: var(--good);
+  transition: width 0.5s ease;
+}
+
+.meter i[data-level='warn'] {
+  background: var(--warn);
+}
+
+.meter i[data-level='bad'] {
+  background: var(--bad);
+}
+
+.money {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--mono);
+}
+
+.money b {
+  font-size: 19px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.money span {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.fact {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.fact dt {
+  color: var(--ink-faint);
+  flex: none;
+}
+
+.fact dd {
+  margin: 0;
+  font-family: var(--mono);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: baseline;
+  padding: 6px 2px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.ledger-row:last-child {
+  border-bottom: none;
+}
+
+.ledger-n {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+}
+
+.ledger-text {
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-cost {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- buttons */
+
+.btn {
+  border-radius: 10px;
+  padding: 9px 13px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  font-weight: 500;
+  text-align: center;
+}
+
+.btn:hover {
+  background: #ffffff12;
+}
+
+.btn[data-kind='primary'] {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: transparent;
+}
+
+.btn[data-kind='primary']:hover {
+  background: #fff;
+}
+
+.btn[data-kind='danger'] {
+  color: #ffb8bd;
+  border-color: #3a1d22;
+  background: #21151800;
+}
+
+.btn[data-kind='danger']:hover {
+  background: #2a1519;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------- dialog */
+
+.veil {
+  position: fixed;
+  inset: 0;
+  background: #000000a8;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  z-index: 20;
+}
+
+.sheet {
+  width: min(440px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.sheet h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field label {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.field .hint {
+  font-size: 11px;
+  color: var(--ink-faint);
+  line-height: 1.5;
+}
+
+.error {
+  font-size: 12px;
+  color: #ffb8bd;
+  background: #2a1519;
+  border: 1px solid #3a1d22;
+  border-radius: 9px;
+  padding: 9px 11px;
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  gap: 9px;
+  justify-content: flex-end;
+}
+
+/* ----------------------------------------------------------------- empty */
+
+.empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+}
+
+.empty-inner {
+  max-width: 340px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  color: var(--ink-dim);
+  line-height: 1.6;
+}
+
+.empty-inner h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--ink);
+}
+
+.wallet-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+}
+
+.wallet-line .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+  flex: none;
+}
+
+.wallet-line span {
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wallet-line b {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-weight: 550;
+  flex: none;
+}

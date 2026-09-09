@@ -1,0 +1,22 @@
+{
+  "name": "@edgerouter/crew",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "server": "bun server/main.ts",
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.85.1",
+    "@earendil-works/pi-ai": "^0.85.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "vite": "^8.2.2"
+  }
+}
