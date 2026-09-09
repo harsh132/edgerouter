@@ -34,7 +34,11 @@ import {
   openEnsSigner,
   revokeAgentName,
   registryOf,
+  permissionsOf,
   setProfile,
+  setText,
+  NONE,
+  RECORD,
   ROOT_NAME,
 } from '../../../packages/ens/src/index';
 import { load, save, type Agent, type Crew } from './store';
@@ -79,6 +83,38 @@ const attach = async (runtime: Runtime, agent: Agent): Promise<Connection> => {
     throw new Error('its budget is spent');
   }
 
+  /*
+    What the chain says this agent may ever do, intersected with what the crew
+    file asks for.
+
+    This is the read that makes `er.permissions` a record rather than a
+    decoration. Striking a permission from the name takes it away from the next
+    capability minted, from a block explorer, without touching this process —
+    which is on-chain revocation of scope rather than merely of existence.
+
+    Its limit is worth stating plainly: a capability already issued keeps what
+    it was given, so a scope revoked on chain takes effect when the agent is
+    next attached, not mid-task. The immediate lever is still the address
+    record; clearing that stops the agent's next payment outright, and it is
+    what `fire` uses.
+
+    A name with no record is unconstrained from here. An RPC that failed reads
+    the same way, deliberately — see `permissionsOf` — because an outage is not
+    a statement about permissions, and the alternative is every agent in the
+    roster losing its tools because a public endpoint was slow.
+  */
+  const asked = knownOnly(agent.permissions ?? DEFAULT_PERMISSIONS);
+  const published = agent.name ? await permissionsOf(createEnsClient(), agent.name) : null;
+  const scope = published === null ? asked : asked.filter((permission) => published.includes(permission));
+
+  if (published !== null && scope.length < asked.length) {
+    const struck = asked.filter((permission) => !scope.includes(permission));
+    emit({
+      type: 'log',
+      text: `${agent.name} does not permit ${struck.join(', ')} on chain; withheld`,
+    });
+  }
+
   const granted = await runtime.authority.mint({
     parent: runtime.authority.rootToken,
     /*
@@ -101,7 +137,7 @@ const attach = async (runtime: Runtime, agent: Agent): Promise<Connection> => {
       permission nothing in this build can check is a token that reads as more
       powerful than it is.
     */
-    scope: knownOnly(agent.permissions ?? DEFAULT_PERMISSIONS),
+    scope,
   });
 
   const connection = await connectAuthority({
@@ -286,6 +322,12 @@ export const hire = async (
           subdelegate: false,
           grantedMinor: params.budgetMinor,
           /*
+            The coarse set, published as the name's outer bound. Coarse is the
+            whole discipline here: `files:read` says this agent may read files,
+            and nothing on chain ever says whose or which.
+          */
+          permissions: agent.permissions ?? DEFAULT_PERMISSIONS,
+          /*
             The picture goes on chain in the same transaction as the name, under
             the conventional ENS keys — so the agent has a face in the ENS
             manager and anywhere else that resolves names, not only in this app.
@@ -412,6 +454,33 @@ export const update = async (
       wanted.length !== current.length || wanted.some((permission) => !current.includes(permission));
 
     agent.permissions = wanted;
+
+    /*
+      The chain first, then the capability. `attach` reads the published set and
+      intersects, so re-minting before the write would produce a capability
+      narrowed by the *old* record — and widening a permission would appear not
+      to work while narrowing appeared to work twice.
+    */
+    if (changed && agent.name && agent.ensResolver) {
+      emit({ type: 'log', text: `publishing ${agent.name}'s permissions …` });
+      try {
+        const ens = openEnsSigner();
+        await setText(
+          { public: ens.public, wallet: ens.wallet },
+          {
+            resolver: agent.ensResolver as `0x${string}`,
+            name: agent.name,
+            key: RECORD.permissions,
+            value: wanted.length === 0 ? NONE : [...wanted].sort().join(' '),
+          },
+        );
+      } catch (error) {
+        emit({
+          type: 'log',
+          text: `${agent.name} kept its published permissions: ${(error as Error).message}`,
+        });
+      }
+    }
 
     if (changed && agent.status !== 'broke' && BigInt(agent.budgetMinor) > BigInt(agent.spentMinor)) {
       runtime.connections.delete(agent.id);

@@ -93,6 +93,7 @@ export const ensureAgentName = async (
     subdelegate?: boolean;
     grantedMinor?: bigint;
     asset?: string;
+    permissions?: readonly string[];
     /** Written in the same transaction as the mint. See `mintAgentName`. */
     profile?: Omit<ProfileRecords, 'resolver' | 'name'>;
     ens?: EnsClient;
@@ -138,6 +139,7 @@ export const ensureAgentName = async (
     ...(params.subdelegate === undefined ? {} : { subdelegate: params.subdelegate }),
     ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
     ...(params.asset ? { asset: params.asset } : {}),
+    ...(params.permissions === undefined ? {} : { permissions: params.permissions }),
     ...(params.profile ? { profile: params.profile } : {}),
   });
 

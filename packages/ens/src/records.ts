@@ -75,6 +75,27 @@ export const RECORD = {
   granted: 'er.granted',
   /** The asset that budget is denominated in — a CAIP-19 identifier. */
   asset: 'er.asset',
+  /**
+   * The outer bound on what this agent may do, space-separated.
+   *
+   * Coarse on purpose, and this is the part that took an argument to get right.
+   * A permission naming a counterparty — `files:read:developer` — would publish
+   * who reads whom, and the set of those records across a tree is an org chart.
+   * Hashing does not help: labels like `developer` and `reviewer` are
+   * brute-forced instantly, and salting them would stop a public reader
+   * verifying anything, which is the only reason to be on chain at all.
+   *
+   * So the split is by granularity rather than by secrecy. What reaches the
+   * chain is `files:read` — this agent may read files at all — and never which
+   * files, whose files, or what they are called. The specific target lives in
+   * the capability, which is private, attenuating, and never published.
+   *
+   * Unlike the records that were removed for having no reader, this one is
+   * read: `attach` intersects it with what the crew file asks for, so a
+   * permission struck from the chain is gone from the next capability minted.
+   * That is on-chain revocation of *scope*, not merely of existence.
+   */
+  permissions: 'er.permissions',
   /*
     Who delegated to this name is not written here either.
 
@@ -118,6 +139,58 @@ export const PROFILE = {
   header: 'header',
   description: 'description',
 } as const;
+
+/**
+ * Reads the outer bound a name publishes, if it publishes one.
+ *
+ * Three answers, and the difference between the last two is the whole point:
+ *
+ *   `null`   — no record. Nobody has said anything, so nothing is constrained
+ *              from here and the capability's own scope stands alone.
+ *   `[]`     — a record saying explicitly nothing. Every permission is struck.
+ *   `[...]`  — the permissions this name may ever hold.
+ *
+ * Collapsing the middle case into the first is the bug this shape exists to
+ * prevent: it would turn "this agent may do nothing" into "this agent is
+ * unconstrained", which is the wrong direction to be wrong in.
+ *
+ * ## Why the empty set is a word
+ *
+ * A resolver cannot tell the two apart on its own. An empty text record reads
+ * back as absent — `getEnsText` answers `null` whether the key was set to the
+ * empty string or never set at all — so writing `''` to strike every
+ * permission would publish "unconstrained" instead. Established against
+ * Sepolia rather than assumed, and it is why the empty set is spelled `none`.
+ * The alternative, deleting the record, says the opposite of what is meant.
+ *
+ * A read that fails returns `null` rather than throwing. An RPC being down is
+ * not a statement about permissions, and treating it as one would either brick
+ * every agent or silently widen them depending on which way the guess fell —
+ * the caller sees "unknown" and decides.
+ */
+/**
+ * How a name says "nothing at all".
+ *
+ * A word rather than an empty string, because an empty text record is
+ * indistinguishable from a missing one. See `permissionsOf`.
+ */
+export const NONE = 'none';
+
+export const permissionsOf = async (
+  ens: { textOf(name: string, key: string): Promise<string | null> },
+  name: string,
+): Promise<readonly string[] | null> => {
+  const raw = await ens.textOf(name, RECORD.permissions).catch(() => null);
+  if (raw === null) return null;
+  const words = raw.split(/\s+/).filter(Boolean);
+  /*
+    `none` is the empty set, not a permission called none. Also treated as empty
+    if it appears alongside others, because a set that both grants and grants
+    nothing is a contradiction, and the safe reading of a contradiction is the
+    narrow one.
+  */
+  return words.includes(NONE) ? [] : words;
+};
 
 export const permissionedResolverAbi = parseAbi([
   'function setAddress(bytes name, uint256 coinType, bytes addressBytes)',
@@ -312,6 +385,8 @@ type AgentRecords = {
   grantedMinor?: bigint;
   asset?: string;
   expiresAt?: number;
+  /** The coarse permission set. Empty is meaningful and is written. */
+  permissions?: readonly string[];
 };
 
 /** The text records a mint writes, in the order they are written. */
@@ -323,6 +398,21 @@ const textEntriesOf = (params: AgentRecords): [string, string][] => [
   ...(params.expiresAt
     ? ([[RECORD.expires, String(Math.floor(params.expiresAt / 1000))]] as [string, string][])
     : []),
+  /*
+    Written even when empty, which is the one case worth being deliberate
+    about. An absent record and an empty one look the same to a careless
+    reader and mean opposite things — "nobody said" versus "explicitly
+    nothing" — and the reader below treats absence as no constraint, so an
+    agent granted nothing must say so rather than say nothing.
+  */
+  ...(params.permissions === undefined
+    ? []
+    : ([
+        [
+          RECORD.permissions,
+          params.permissions.length === 0 ? NONE : [...params.permissions].sort().join(' '),
+        ],
+      ] as [string, string][])),
 ];
 
 /**

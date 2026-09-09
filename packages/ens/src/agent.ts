@@ -128,6 +128,8 @@ export const mintAgentName = async (
     grantedMinor?: bigint;
     asset?: string;
     expiresAt?: number;
+    /** The coarse permission set, published as this name's outer bound. */
+    permissions?: readonly string[];
     /**
      * What the name says about itself, written in the same transaction.
      *
@@ -233,6 +235,7 @@ export const mintAgentName = async (
       address: params.address ?? owner,
       ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
       ...(params.asset ? { asset: params.asset } : {}),
+      ...(params.permissions === undefined ? {} : { permissions: params.permissions }),
       expiresAt,
     }),
   ];
