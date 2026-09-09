@@ -2,7 +2,7 @@
  * One agent in the rail: who it is, when it last worked, and what it last said.
  */
 import { AgentMark } from './agent-mark';
-import { summarise, when } from '@/lib/format';
+import { nameOf, summarise, when } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Agent } from '@/api';
 
@@ -26,7 +26,7 @@ export const AgentRow = ({
     <div className="min-w-0 flex-1">
       <div className="flex items-baseline gap-2">
         <span className={cn('truncate text-sm font-medium', agent.status === 'revoked' && 'text-muted-foreground line-through')}>
-          {agent.label}
+          {nameOf(agent)}
         </span>
         <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
           {when(agent.tasks.at(-1)?.startedAt ?? agent.createdAt)}

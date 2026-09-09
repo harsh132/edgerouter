@@ -191,6 +191,8 @@ export const hire = async (
   runtime: Runtime,
   params: {
     label: string;
+    /** What a person calls it. Optional — an agent may just be its alias. */
+    title?: string;
     brief: string;
     budgetMinor: bigint;
     model: string;
@@ -239,6 +241,7 @@ export const hire = async (
     createdAt: Date.now(),
     status: 'idle',
     tasks: [],
+    ...(params.title?.trim() ? { title: params.title.trim() } : {}),
     ...(params.avatar ? { avatar: params.avatar } : {}),
     ...(params.header ? { header: params.header } : {}),
   };
@@ -280,6 +283,7 @@ export const hire = async (
             resolver: named.resolver,
             name: named.name,
             description: agent.brief,
+            ...(agent.title ? { display: agent.title } : {}),
             ...(agent.avatar ? { avatar: agent.avatar } : {}),
             ...(agent.header ? { header: agent.header } : {}),
           },
@@ -301,11 +305,13 @@ export const hire = async (
 /**
  * Changes an agent after it exists.
  *
- * Everything here is editable except the one thing that cannot be: the label.
+ * Everything here is editable except the one thing that cannot be: the alias.
  * It is half the ENS name, the name is the node the authority charges, and the
- * guard checks that node before every signature — renaming would mean minting a
- * second name and abandoning the first, which is a different operation with a
- * different price, so it is not offered as an edit.
+ * guard checks that node before every signature — changing it would mean minting
+ * a second name and abandoning the first, which is a different operation with a
+ * different price, so it is not offered as an edit. The title is not the alias
+ * and nothing is keyed on it, which is exactly why it can be changed freely: an
+ * agent can be promoted without being re-hired.
  *
  * A budget change re-mints the allowance, because the tree holds an amount and
  * not a reference to this record. Lowering below what is already spent is
@@ -315,7 +321,14 @@ export const hire = async (
 export const update = async (
   runtime: Runtime,
   id: string,
-  changes: { brief?: string; model?: string; budgetMinor?: bigint; avatar?: string; header?: string },
+  changes: {
+    title?: string;
+    brief?: string;
+    model?: string;
+    budgetMinor?: bigint;
+    avatar?: string;
+    header?: string;
+  },
 ): Promise<Agent> => {
   const agent = agentById(runtime, id);
   if (agent.status === 'revoked') throw new Error(`${agent.label} has been revoked`);
@@ -359,6 +372,7 @@ export const update = async (
     }
   }
 
+  if (changes.title !== undefined) agent.title = changes.title.trim();
   if (changes.brief !== undefined) agent.brief = changes.brief;
   if (changes.model !== undefined) agent.model = changes.model;
   if (changes.avatar !== undefined) agent.avatar = changes.avatar;
@@ -370,6 +384,7 @@ export const update = async (
     because a description changed would be charging the user for nothing.
   */
   const profile = {
+    ...(changes.title !== undefined ? { display: changes.title.trim() } : {}),
     ...(changes.brief !== undefined ? { description: changes.brief } : {}),
     ...(changes.avatar !== undefined ? { avatar: changes.avatar } : {}),
     ...(changes.header !== undefined ? { header: changes.header } : {}),

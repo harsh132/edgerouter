@@ -20,11 +20,15 @@ export type Profile = { avatar: string; header: string };
 
 export const ProfilePreview = ({
   label,
+  title,
   avatar,
   header,
   className,
 }: {
+  /** The alias — what the sigil is drawn from, and what gets registered. */
   label: string;
+  /** The display name, if there is one yet. */
+  title?: string;
   avatar: string;
   header: string;
   className?: string;
@@ -45,8 +49,11 @@ export const ProfilePreview = ({
             <span className="block size-full" dangerouslySetInnerHTML={{ __html: svg! }} />
           )}
         </div>
-        <div className="min-w-0 pb-0.5 font-mono text-[11px] break-all text-muted-foreground">
-          {label.trim() ? label.trim().toLowerCase() : 'unnamed'}
+        <div className="min-w-0 pb-0.5">
+          {title?.trim() ? <div className="truncate text-sm font-medium">{title.trim()}</div> : null}
+          <div className="font-mono text-[11px] break-all text-muted-foreground">
+            {label.trim() ? label.trim().toLowerCase() : 'unnamed'}
+          </div>
         </div>
       </div>
     </div>

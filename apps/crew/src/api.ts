@@ -29,8 +29,12 @@ export type Task = {
 
 export type Agent = {
   id: string;
+  /** The ENS label. `cto`. Fixed. */
   label: string;
+  /** The full ENS name, once minted. */
   name?: string;
+  /** The display name. `Chief Technical Officer`. Absent means use the alias. */
+  title?: string;
   brief: string;
   model: string;
   budgetMinor: string;
@@ -75,6 +79,7 @@ const post = async (path: string, body?: unknown): Promise<unknown> => {
 
 export const hire = (agent: {
   label: string;
+  title?: string;
   brief: string;
   budgetMinor: string;
   model: string;
@@ -93,7 +98,14 @@ export const assign = (id: string, prompt: string) => post(`/api/agents/${id}/ta
  */
 export const edit = (
   id: string,
-  changes: { brief?: string; model?: string; budgetMinor?: string; avatar?: string; header?: string },
+  changes: {
+    title?: string;
+    brief?: string;
+    model?: string;
+    budgetMinor?: string;
+    avatar?: string;
+    header?: string;
+  },
 ) => post(`/api/agents/${id}/edit`, changes);
 export const halt = (id: string) => post(`/api/agents/${id}/stop`);
 export const fire = (id: string) => post(`/api/agents/${id}/fire`);

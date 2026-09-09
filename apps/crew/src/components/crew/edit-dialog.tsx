@@ -2,11 +2,15 @@
  * Changing an agent that already exists.
  *
  * Everything an agent has is editable except the one thing that cannot be: its
- * name. That name is a record on a chain and the node the authority charges, so
- * renaming would mean minting a second name and abandoning the first — a
- * different operation at a different price, not an edit. It is shown, greyed,
- * rather than hidden, because "why can I not rename this" is a question worth
- * answering in place.
+ * alias. That alias is half a record on a chain and the node the authority
+ * charges, so changing it would mean minting a second name and abandoning the
+ * first — a different operation at a different price, not an edit. It is shown,
+ * greyed, rather than hidden, because "why can I not change this" is a question
+ * worth answering in place.
+ *
+ * The name is not the alias, and it does change here: nothing is keyed on it,
+ * so an agent can be promoted without being re-hired. It costs one transaction,
+ * like every other record on this form.
  *
  * Only what actually changed is sent. Each field that reaches ENS is its own
  * transaction, and rewriting an untouched avatar because a description changed
@@ -26,7 +30,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { ProfileFields, ProfilePreview } from './profile-fields';
-import { money, toMinor } from '@/lib/format';
+import { money, nameOf, toMinor } from '@/lib/format';
 import { sigilDataUri } from '@/lib/sigil';
 import { edit, type Agent, type State } from '@/api';
 
@@ -49,6 +53,7 @@ export const EditDialog = ({
     with the dialog open cannot leave one agent's description sitting in
     another's form.
   */
+  const [title, setTitle] = useState(agent.title ?? '');
   const [brief, setBrief] = useState(agent.brief);
   const [model, setModel] = useState(agent.model);
   const [budget, setBudget] = useState(money(agent.network, agent.budgetMinor).split(' ')[0] ?? '');
@@ -82,6 +87,7 @@ export const EditDialog = ({
     const wanted = avatar.trim() || sigilDataUri(agent.label);
 
     const changes = {
+      ...(title.trim() !== (agent.title ?? '') ? { title: title.trim() } : {}),
       ...(brief !== agent.brief ? { brief } : {}),
       ...(model !== agent.model ? { model } : {}),
       ...(budgetMinor.toString() !== agent.budgetMinor ? { budgetMinor: budgetMinor.toString() } : {}),
@@ -109,7 +115,7 @@ export const EditDialog = ({
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit {agent.label}</DialogTitle>
+          <DialogTitle>Edit {nameOf(agent)}</DialogTitle>
           <DialogDescription>
             {agent.name
               ? 'Its picture and description are ENS records, so changes are transactions.'
@@ -118,14 +124,29 @@ export const EditDialog = ({
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
-          <ProfilePreview label={agent.label} avatar={avatar} header={header} />
+          <ProfilePreview label={agent.label} title={title} avatar={avatar} header={header} />
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-muted-foreground">Name</label>
+            <label htmlFor="edit-title" className="text-xs text-muted-foreground">
+              Name
+            </label>
+            <Input
+              id="edit-title"
+              value={title}
+              placeholder={agent.label}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              What you call it. Empty means it goes by its alias.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs text-muted-foreground">Alias</label>
             <Input value={agent.name ?? agent.label} disabled className="font-mono text-xs" />
             <p className="text-[11px] leading-relaxed text-muted-foreground">
-              Fixed. The name is what the authority charges and what revoking clears, so a new one would be a new
-              agent rather than a rename.
+              Fixed. This is what the authority charges and what revoking clears, so a new one would be a new agent
+              rather than a rename.
             </p>
           </div>
 

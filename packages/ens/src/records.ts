@@ -82,14 +82,25 @@ export const RECORD = {
 /**
  * The keys everyone else already reads.
  *
- * Deliberately not namespaced, unlike `RECORD` above. `avatar`, `header` and
- * `description` are the conventional ENS profile keys, so an agent named here
- * shows up with its picture in the ENS manager and anywhere else that resolves
- * names — which is the whole argument for these being real names rather than
- * rows in our database. A namespaced `er.avatar` would be correct, private, and
- * invisible.
+ * Deliberately not namespaced, unlike `RECORD` above. `display`, `avatar`,
+ * `header` and `description` are the conventional ENS profile keys, so an agent
+ * named here shows up with its picture in the ENS manager and anywhere else
+ * that resolves names — which is the whole argument for these being real names
+ * rather than rows in our database. A namespaced `er.avatar` would be correct,
+ * private, and invisible.
+ *
+ * `display` is the odd one out, and worth explaining. It is the one key here
+ * that is not a picture: `cto.edgerouter.eth` is what the chain calls the
+ * agent, and "Chief Technical Officer" is what a person calls it. ENSIP-5
+ * defines `display` as exactly that — "a canonical display name for the ENS
+ * name" — and it is the right key even though almost nobody writes it today;
+ * `avatar` and `description` are set on every profile worth looking at, and
+ * `display` is null on all of them. It is kept anyway rather than namespaced as
+ * `er.name`, because the two have the same number of readers right now and only
+ * one of them is what a future reader would look for.
  */
 export const PROFILE = {
+  display: 'display',
   avatar: 'avatar',
   header: 'header',
   description: 'description',
@@ -195,6 +206,12 @@ export const setProfile = async (
   params: {
     resolver: Address;
     name: string;
+    /**
+     * The display name — what a person calls this agent, as opposed to what it
+     * is registered as. Called `display` here only because `name` above is
+     * already taken by the name being written to.
+     */
+    display?: string;
     /** A URL, an ipfs:// URI, or a data: URI. ENS clients accept all three. */
     avatar?: string;
     header?: string;
@@ -202,6 +219,7 @@ export const setProfile = async (
   },
 ): Promise<Hash[]> => {
   const entries: [string, string][] = [
+    ...(params.display === undefined ? [] : ([[PROFILE.display, params.display]] as [string, string][])),
     ...(params.avatar === undefined ? [] : ([[PROFILE.avatar, params.avatar]] as [string, string][])),
     ...(params.header === undefined ? [] : ([[PROFILE.header, params.header]] as [string, string][])),
     ...(params.description === undefined

@@ -54,10 +54,23 @@ export type Task = {
 
 export type Agent = {
   id: string;
-  /** What the user typed. `researcher`. */
+  /**
+   * The alias: the label the name is registered under. `cto`.
+   *
+   * Lowercase, hyphenated, unique under the parent, and fixed once minted,
+   * because it is half of an ENS name and the node the authority charges.
+   */
   label: string;
   /** The full ENS name, once it exists. Absent while minting or if naming is off. */
   name?: string;
+  /**
+   * What a person calls it. `Chief Technical Officer`.
+   *
+   * Free text, and free to change: nothing is keyed on it. Absent means the
+   * agent is called by its alias, which is what every agent hired before this
+   * field existed is.
+   */
+  title?: string;
   /** The persona. Becomes the system prompt. */
   brief: string;
   /** Which model it buys from the gate. */

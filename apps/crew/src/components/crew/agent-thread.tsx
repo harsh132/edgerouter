@@ -11,7 +11,7 @@ import { AgentMark } from './agent-mark';
 import { Receipt } from './receipt';
 import { ToolCall } from './tool-call';
 import { Typing } from './typing';
-import { when } from '@/lib/format';
+import { nameOf, when } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { assign, halt, type Agent, type Step, type Task } from '@/api';
 
@@ -106,7 +106,7 @@ export const AgentThread = ({ agent }: { agent: Agent }) => {
       <header className="flex items-center gap-2.5 border-b px-5 py-3">
         <AgentMark agent={agent} size="sm" />
         <div className="min-w-0">
-          <div className="text-sm font-semibold">{agent.label}</div>
+          <div className="truncate text-sm font-semibold">{nameOf(agent)}</div>
           <div className="truncate font-mono text-[11px] text-muted-foreground">{agent.name ?? 'no ENS name'}</div>
         </div>
         {agent.running ? (
@@ -122,7 +122,7 @@ export const AgentThread = ({ agent }: { agent: Agent }) => {
           {agent.tasks.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-20 text-center">
               <AgentMark agent={agent} size="lg" />
-              <h2 className="text-base font-semibold">{agent.label}</h2>
+              <h2 className="text-base font-semibold">{nameOf(agent)}</h2>
               <p className="max-w-sm text-sm text-muted-foreground">{agent.brief}</p>
               <p className="max-w-sm text-xs text-muted-foreground">
                 Give it a task. Every reply it writes is bought from the gate with its own budget.
@@ -153,7 +153,9 @@ export const AgentThread = ({ agent }: { agent: Agent }) => {
               rows={1}
               value={draft}
               disabled={spent}
-              placeholder={spent ? `${agent.label} cannot spend any more` : `Give ${agent.label} a task`}
+              placeholder={
+                spent ? `${nameOf(agent)} cannot spend any more` : `Give ${nameOf(agent)} a task`
+              }
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {

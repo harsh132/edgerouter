@@ -136,6 +136,7 @@ Bun.serve({
     if (request.method === 'POST' && path === '/api/agents') {
       const body = (await request.json()) as {
         label: string;
+        title?: string;
         brief: string;
         budgetMinor: string;
         model: string;
@@ -146,6 +147,7 @@ Bun.serve({
         const agent = await hire(runtime, {
           label: body.label,
           brief: body.brief,
+          ...(body.title ? { title: body.title } : {}),
           budgetMinor: BigInt(body.budgetMinor),
           model: body.model,
           ...(body.avatar ? { avatar: body.avatar } : {}),
@@ -166,6 +168,7 @@ Bun.serve({
         if (action === 'stop') return json({ stopped: stop(id) });
         if (action === 'edit') {
           const changes = (await request.json()) as {
+            title?: string;
             brief?: string;
             model?: string;
             budgetMinor?: string;
@@ -173,6 +176,7 @@ Bun.serve({
             header?: string;
           };
           await update(runtime, id, {
+            ...(changes.title === undefined ? {} : { title: changes.title }),
             ...(changes.brief === undefined ? {} : { brief: changes.brief }),
             ...(changes.model === undefined ? {} : { model: changes.model }),
             ...(changes.budgetMinor === undefined ? {} : { budgetMinor: BigInt(changes.budgetMinor) }),

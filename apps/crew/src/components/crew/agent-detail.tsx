@@ -15,7 +15,7 @@ import { Ledger } from './ledger';
 import { EditDialog } from './edit-dialog';
 import { Section } from './section';
 import { SpendMeter } from './spend-meter';
-import { when } from '@/lib/format';
+import { nameOf, when } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { fire, type Agent, type State } from '@/api';
 
@@ -45,7 +45,7 @@ export const AgentDetail = ({ agent, state }: { agent: Agent; state: State }) =>
         </div>
         <div className="flex flex-col items-center gap-2 px-5 pb-1 text-center">
           <AgentMark agent={agent} size="lg" className="-mt-7 rounded-xl ring-4 ring-card" />
-          <div className="text-sm font-semibold">{agent.label}</div>
+          <div className="text-sm font-semibold">{nameOf(agent)}</div>
         <div
           className={cn(
             'font-mono text-[11px] break-all',

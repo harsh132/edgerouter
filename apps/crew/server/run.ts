@@ -128,7 +128,7 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
       systemPrompt: [
         agent.brief.trim(),
         '',
-        `You are ${agent.name ?? agent.label}, an autonomous agent.`,
+        `You are ${agent.title ?? agent.label}${agent.name ? ` (${agent.name})` : ''}, an autonomous agent.`,
         'Every reply you generate is paid for out of a budget you cannot raise,',
         'and every tool call is a step you pay for too. Work in as few steps as',
         'you can, and stop when the task is done.',
