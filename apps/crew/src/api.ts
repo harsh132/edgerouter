@@ -41,6 +41,8 @@ export type Agent = {
   spentMinor: string;
   budget: string;
   spent: string;
+  /** What it may do, beyond spend. Always sent, defaults resolved by the runtime. */
+  permissions: string[];
   /** Its picture and banner. Also written to ENS, where others can see them. */
   avatar?: string;
   header?: string;
@@ -52,6 +54,9 @@ export type Agent = {
   tasks: Task[];
 };
 
+/** One permission the runtime enforces, as it describes itself. */
+export type PermissionInfo = { name: string; label: string; detail: string; default: boolean };
+
 export type State = {
   gate: string;
   network: string;
@@ -62,6 +67,7 @@ export type State = {
   naming: boolean;
   root: string;
   models: string[];
+  permissions: PermissionInfo[];
   file: string;
   agents: Agent[];
 };
@@ -80,6 +86,7 @@ const post = async (path: string, body?: unknown): Promise<unknown> => {
 export const hire = (agent: {
   label: string;
   title?: string;
+  permissions?: string[];
   brief: string;
   budgetMinor: string;
   model: string;
@@ -100,6 +107,7 @@ export const edit = (
   id: string,
   changes: {
     title?: string;
+    permissions?: string[];
     brief?: string;
     model?: string;
     budgetMinor?: string;

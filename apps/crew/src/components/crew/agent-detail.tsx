@@ -13,6 +13,7 @@ import { AgentMark } from './agent-mark';
 import { FactList } from './fact-list';
 import { Ledger } from './ledger';
 import { EditDialog } from './edit-dialog';
+import { PermissionList } from './permission-fields';
 import { Section } from './section';
 import { SpendMeter } from './spend-meter';
 import { nameOf, when } from '@/lib/format';
@@ -90,6 +91,13 @@ export const AgentDetail = ({ agent, state }: { agent: Agent; state: State }) =>
             { term: 'network', value: agent.network },
             { term: 'hired', value: when(agent.createdAt) },
           ]}
+        />
+      </Section>
+
+      <Section title="Permissions">
+        <PermissionList
+          granted={agent.permissions}
+          available={state.permissions}
         />
       </Section>
 

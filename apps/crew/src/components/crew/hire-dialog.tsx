@@ -29,6 +29,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { PermissionFields } from './permission-fields';
 import { ProfileFields, ProfilePreview } from './profile-fields';
 import { aliasOf, toMinor } from '@/lib/format';
 import { sigilDataUri } from '@/lib/sigil';
@@ -68,6 +69,14 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
   const [model, setModel] = useState(state.models[0] ?? '');
   const [avatar, setAvatar] = useState('');
   const [header, setHeader] = useState('');
+  /*
+    Seeded from what the runtime calls its default rather than from a list here,
+    so the boxes a user sees ticked are the ones the server would have granted
+    anyway. Two definitions of "default" is one too many.
+  */
+  const [permissions, setPermissions] = useState<string[]>(
+    state.permissions.filter((permission) => permission.default).map((permission) => permission.name),
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -116,6 +125,7 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
           output through a DOM element. That split is the right one anyway — the
           page makes the picture, and the only process holding a key writes it.
         */
+        permissions,
         avatar: avatar.trim() || sigilDataUri(alias || 'agent'),
         ...(header.trim() ? { header: header.trim() } : {}),
       });
@@ -228,6 +238,8 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
               </SelectContent>
             </Select>
           </Field>
+
+          <PermissionFields available={state.permissions} granted={permissions} onChange={setPermissions} />
 
           <ProfileFields avatar={avatar} header={header} onAvatar={setAvatar} onHeader={setHeader} />
 

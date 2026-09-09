@@ -22,10 +22,12 @@ import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { randomUUID } from 'node:crypto';
 import { formatAmount } from '../../../packages/sdk/src/index';
+import { allows as permitted } from '../../../packages/core/src/caveat';
 import { modelFor } from './model';
 import { payingFetch, BudgetExhausted } from './paying-fetch';
 import { connectionFor, publish, type Runtime } from './crew';
 import { toolsFor } from './tools';
+import { ALL_PERMISSIONS, type Permission } from './permissions';
 import { emit } from './events';
 import type { Agent, Step, Task } from './store';
 
@@ -118,6 +120,30 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
     },
   });
 
+  /*
+    What this agent may do, read out of the capability it is about to spend
+    with rather than out of the crew file beside it.
+
+    The two normally agree, and when they do not the capability is right: it is
+    the thing that was signed, the thing the authority checks, and the thing an
+    attenuated grant from another agent would have narrowed. Trusting the file
+    would mean a token saying one thing while the tools do another, which is the
+    shape of every permission bug worth having.
+
+    A capability that cannot be opened yields no permissions at all. That is the
+    fail-closed direction and it is deliberate — an agent whose token is
+    unreadable should be able to buy nothing and touch nothing, not everything.
+  */
+  const policy = agent.capability
+    ? await runtime.authority
+        .open(agent.capability)
+        .then((opened) => opened.policy)
+        .catch(() => null)
+    : null;
+  const allows = (permission: Permission): boolean => policy !== null && permitted(policy, permission);
+
+  const missing = ALL_PERMISSIONS.filter((permission) => !allows(permission));
+
   const model = modelFor(runtime.gate, agent.model);
   const api = openAICompletionsApi();
 
@@ -155,13 +181,30 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
         'You have a workspace of your own. Files you write there persist between',
         'tasks, and nothing outside it is reachable. When a task produces',
         'something worth keeping, write it to a file rather than only saying it.',
+        '',
+        /*
+          What it cannot do, said plainly, because absence is silent and silence
+          costs money. A read-only agent asked to write a file has no
+          `write_file` to call, so it goes looking for another way and pays for
+          every step of looking — observed here at the price of an agent's whole
+          remaining budget. Naming the limit up front is cheaper than letting it
+          be discovered.
+        */
+        ...(missing.length > 0
+          ? [
+              `You do not have these permissions: ${missing.join(', ')}.`,
+              'Nothing you can do will work around that. If a task needs one of',
+              'them, say which is missing and stop rather than looking for another',
+              'route — there is not one, and looking costs the same as working.',
+            ]
+          : []),
       ].join('\n'),
       model,
       /*
         Bound to this agent, so the workspace is captured when the tools are
         built rather than travelling as an argument the model could set.
       */
-      tools: toolsFor(agent.label),
+      tools: toolsFor(agent.label, allows),
     } as never,
   });
 

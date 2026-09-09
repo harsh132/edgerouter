@@ -29,6 +29,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { PermissionFields } from './permission-fields';
 import { ProfileFields, ProfilePreview } from './profile-fields';
 import { money, nameOf, toMinor } from '@/lib/format';
 import { sigilDataUri } from '@/lib/sigil';
@@ -57,6 +58,7 @@ export const EditDialog = ({
   const [brief, setBrief] = useState(agent.brief);
   const [model, setModel] = useState(agent.model);
   const [budget, setBudget] = useState(money(agent.network, agent.budgetMinor).split(' ')[0] ?? '');
+  const [permissions, setPermissions] = useState<string[]>(agent.permissions);
   const [avatar, setAvatar] = useState(agent.avatar ?? '');
   const [header, setHeader] = useState(agent.header ?? '');
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +88,17 @@ export const EditDialog = ({
     */
     const wanted = avatar.trim() || sigilDataUri(agent.label);
 
+    /*
+      Order-insensitive, because the checkbox order is not a fact about the
+      agent. Comparing the arrays directly would re-issue a capability, and
+      charge for it, every time a box was ticked and unticked.
+    */
+    const held = agent.permissions;
+    const permissionsChanged =
+      permissions.length !== held.length || permissions.some((name) => !held.includes(name));
+
     const changes = {
+      ...(permissionsChanged ? { permissions } : {}),
       ...(title.trim() !== (agent.title ?? '') ? { title: title.trim() } : {}),
       ...(brief !== agent.brief ? { brief } : {}),
       ...(model !== agent.model ? { model } : {}),
@@ -187,6 +199,8 @@ export const EditDialog = ({
               </SelectContent>
             </Select>
           </div>
+
+          <PermissionFields available={state.permissions} granted={permissions} onChange={setPermissions} />
 
           <ProfileFields avatar={avatar} header={header} onAvatar={setAvatar} onHeader={setHeader} />
 

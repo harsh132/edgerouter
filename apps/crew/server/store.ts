@@ -88,6 +88,19 @@ export type Agent = {
   /** Where its name was minted, kept so revoking does not have to look it up. */
   ensParentRegistry?: string;
   ensResolver?: string;
+  /**
+   * What it is allowed to do, beyond spend.
+   *
+   * Names from `permissions.ts`. Absent means the default set — its own
+   * workspace and nothing else — which is exactly what every agent hired before
+   * this field existed already had, so an upgraded install changes no
+   * behaviour.
+   *
+   * This is a record of intent, not the thing enforced. Enforcement reads the
+   * capability, which is minted from this on every attach; if the two ever
+   * disagree the capability wins, because it is the half that was signed.
+   */
+  permissions?: string[];
   /** Smallest units this agent may ever spend. */
   budgetMinor: string;
   /** Smallest units it has spent. */

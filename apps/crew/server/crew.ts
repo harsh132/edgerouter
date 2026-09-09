@@ -38,6 +38,7 @@ import {
   ROOT_NAME,
 } from '../../../packages/ens/src/index';
 import { load, save, type Agent, type Crew } from './store';
+import { ALL_PERMISSIONS, DEFAULT_PERMISSIONS, knownOnly } from './permissions';
 import { emit } from './events';
 import { openWallet, type OpenWallet } from './wallet';
 
@@ -90,6 +91,17 @@ const attach = async (runtime: Runtime, agent: Agent): Promise<Connection> => {
     child: agent.name ?? agent.label,
     amountMinor: remaining,
     expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    /*
+      Permissions are minted with the allowance rather than stored beside it, so
+      the thing an agent presents is the thing that says what it may do. The
+      authority intersects this with what the parent holds, so a request for
+      more than the root was given comes back smaller rather than refused.
+
+      Unknown names are dropped here rather than sent: a token asserting a
+      permission nothing in this build can check is a token that reads as more
+      powerful than it is.
+    */
+    scope: knownOnly(agent.permissions ?? DEFAULT_PERMISSIONS),
   });
 
   const connection = await connectAuthority({
@@ -126,6 +138,13 @@ export const boot = async (options: { gate: string; network: string }): Promise<
       pass through untouched — the root is called `root` and always will be.
     */
     names: ensNameGuard({ suffix: '.eth' }),
+    /*
+      The root holds every permission this build defines, because it is the
+      ceiling agents are minted beneath rather than an actor in its own right.
+      Nothing runs as the root — an agent gets what its own grant names,
+      intersected with this.
+    */
+    scope: ALL_PERMISSIONS,
   });
 
   const server = await serveAuthority(authorityHandler(authority), { port: AUTHORITY_PORT });
@@ -199,6 +218,8 @@ export const hire = async (
     /** Drawn in the browser — a sigil, or whatever the user pointed at. */
     avatar?: string;
     header?: string;
+    /** What it may do. Omitted means the default set. */
+    permissions?: string[];
   },
 ): Promise<Agent> => {
   const label = params.label
@@ -241,6 +262,7 @@ export const hire = async (
     createdAt: Date.now(),
     status: 'idle',
     tasks: [],
+    permissions: knownOnly(params.permissions ?? DEFAULT_PERMISSIONS),
     ...(params.title?.trim() ? { title: params.title.trim() } : {}),
     ...(params.avatar ? { avatar: params.avatar } : {}),
     ...(params.header ? { header: params.header } : {}),
@@ -327,6 +349,7 @@ export const update = async (
     budgetMinor?: bigint;
     avatar?: string;
     header?: string;
+    permissions?: string[];
   },
 ): Promise<Agent> => {
   const agent = agentById(runtime, id);
@@ -368,6 +391,36 @@ export const update = async (
       await attach(runtime, agent);
     } else {
       agent.status = 'broke';
+    }
+  }
+
+  /*
+    Permissions live in the capability, so changing them means issuing a new
+    one. Same shape as a budget change and for the same reason: the tree holds
+    a token, not a reference to this record, and editing the record alone would
+    leave an agent whose file says one thing while the thing it presents at the
+    gate says another.
+
+    The old allowance is withdrawn first. Two live capabilities for one agent
+    would mean it holds the union of their permissions, which is the one thing a
+    narrowing must never quietly become.
+  */
+  if (changes.permissions !== undefined) {
+    const wanted = knownOnly(changes.permissions);
+    const current = agent.permissions ?? DEFAULT_PERMISSIONS;
+    const changed =
+      wanted.length !== current.length || wanted.some((permission) => !current.includes(permission));
+
+    agent.permissions = wanted;
+
+    if (changed && agent.status !== 'broke' && BigInt(agent.budgetMinor) > BigInt(agent.spentMinor)) {
+      runtime.connections.delete(agent.id);
+      try {
+        runtime.authority.revoke({ token: runtime.authority.rootToken, node: agent.name ?? agent.label });
+      } catch {
+        // Not in the tree — nothing to withdraw before re-minting.
+      }
+      await attach(runtime, agent);
     }
   }
 

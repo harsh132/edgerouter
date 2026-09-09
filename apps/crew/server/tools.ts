@@ -36,6 +36,7 @@ import { mkdirSync, existsSync } from 'node:fs';
 import { readFile, writeFile, readdir, stat, mkdir, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
+import type { Permission } from './permissions';
 
 const WORKSPACES = join(homedir(), '.edgerouter', 'workspaces');
 
@@ -95,15 +96,46 @@ const tool = <T extends TSchema>(
 };
 
 /**
- * The tools one agent gets, bound to its own room.
+ * The tools one agent gets, bound to its own room and its own permissions.
  *
  * Built per agent rather than shared, so the workspace is captured here and
- * never travels as an argument the model could set.
+ * never travels as an argument the model could set. `allows` comes from the
+ * agent's capability rather than from the crew file — the capability is the
+ * thing that was signed, and reading permissions from anywhere else would mean
+ * an agent whose token says one thing and whose tools do another.
+ *
+ * A tool the agent may not use is *absent*, not present-and-refusing. The
+ * difference is money: a model that can see `write_file` will call it, and
+ * every refusal it reasons its way around is a step bought from the gate.
+ * The permission is checked inside the tool as well, which is belt and braces —
+ * the list is built once per run, and a later refactor rebuilding it from
+ * something staler should fail closed rather than quietly grant.
  */
-export const toolsFor = (label: string): AgentTool[] => {
+export const toolsFor = (
+  label: string,
+  allows: (permission: Permission) => boolean,
+): AgentTool[] => {
   const room = workspaceFor(label);
 
+  /*
+    Refused in words, because the model has to decide what to do instead. It is
+    told the refusal is final: an agent that reads "denied" as "try a different
+    path" will spend its budget enumerating the ones it also cannot reach.
+  */
+  const needs = (permission: Permission) => {
+    if (!allows(permission)) {
+      throw new Error(
+        `you do not have the ${permission} permission, and there is no way around it — ` +
+          'say so and stop rather than trying another way',
+      );
+    }
+  };
+
+  const granted = (permission: Permission, made: AgentTool[]): AgentTool[] =>
+    allows(permission) ? made : [];
+
   return [
+    ...granted('files:read', [
     tool({
       name: 'list_files',
       label: 'List files',
@@ -113,6 +145,7 @@ export const toolsFor = (label: string): AgentTool[] => {
         path: Type.Optional(Type.String({ description: 'Directory relative to your workspace. Defaults to ".".' })),
       }),
       run: async ({ path }) => {
+        needs('files:read');
         const target = await inside(room, path?.trim() || '.');
         const entries = await readdir(target, { withFileTypes: true }).catch(() => null);
         if (!entries) return 'That directory does not exist.';
@@ -137,6 +170,7 @@ export const toolsFor = (label: string): AgentTool[] => {
         path: Type.String({ description: 'File relative to your workspace.' }),
       }),
       run: async ({ path }) => {
+        needs('files:read');
         const target = await inside(room, path);
         const body = await readFile(target, 'utf8').catch(() => null);
         if (body === null) return 'That file does not exist.';
@@ -151,6 +185,9 @@ export const toolsFor = (label: string): AgentTool[] => {
       },
     }),
 
+    ]),
+
+    ...granted('files:write', [
     tool({
       name: 'write_file',
       label: 'Write file',
@@ -161,6 +198,7 @@ export const toolsFor = (label: string): AgentTool[] => {
         content: Type.String({ description: 'The full contents to write.' }),
       }),
       run: async ({ path, content }) => {
+        needs('files:write');
         const target = await inside(room, path);
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, content, 'utf8');
@@ -168,6 +206,9 @@ export const toolsFor = (label: string): AgentTool[] => {
       },
     }),
 
+    ]),
+
+    ...granted('files:read', [
     tool({
       name: 'search_files',
       label: 'Search files',
@@ -176,6 +217,7 @@ export const toolsFor = (label: string): AgentTool[] => {
         query: Type.String({ description: 'Text to look for. Case-insensitive.' }),
       }),
       run: async ({ query }) => {
+        needs('files:read');
         const needle = query.toLowerCase();
         const hits: string[] = [];
 
@@ -200,5 +242,6 @@ export const toolsFor = (label: string): AgentTool[] => {
         return hits.length > 0 ? hits.join('\n') : 'Nothing matched.';
       },
     }),
+    ]),
   ];
 };

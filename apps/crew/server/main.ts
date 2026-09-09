@@ -22,6 +22,7 @@ import { boot, hire, fire, update, agentById, type Runtime } from './crew';
 import { runTask, stop, isRunning } from './run';
 import { subscribe } from './events';
 import { MODELS } from './model';
+import { DEFAULT_PERMISSIONS, PERMISSIONS } from './permissions';
 import { FILE_PATH } from './store';
 
 /*
@@ -67,10 +68,26 @@ const stateOf = (runtime: Runtime) => ({
   naming: runtime.naming,
   root: ROOT_NAME,
   models: MODELS,
+  /*
+    Sent rather than hard-coded in the page, so the checkboxes are the
+    permissions this runtime actually enforces. A UI offering one the server has
+    never heard of would grant nothing and say it had.
+  */
+  permissions: Object.entries(PERMISSIONS).map(([name, about]) => ({
+    name,
+    ...about,
+    default: (DEFAULT_PERMISSIONS as string[]).includes(name),
+  })),
   file: FILE_PATH,
   agents: runtime.crew.agents.map((agent) => ({
     ...agent,
     running: isRunning(agent.id),
+    /*
+      Always populated, even for an agent stored before permissions existed.
+      The page would otherwise have to know what the default is to render it,
+      and a second definition of the default is how the two come to disagree.
+    */
+    permissions: agent.permissions ?? DEFAULT_PERMISSIONS,
     budget: formatAmount(agent.network, BigInt(agent.budgetMinor)),
     spent: formatAmount(agent.network, BigInt(agent.spentMinor)),
   })),
@@ -142,12 +159,14 @@ Bun.serve({
         model: string;
         avatar?: string;
         header?: string;
+        permissions?: string[];
       };
       try {
         const agent = await hire(runtime, {
           label: body.label,
           brief: body.brief,
           ...(body.title ? { title: body.title } : {}),
+          ...(body.permissions ? { permissions: body.permissions } : {}),
           budgetMinor: BigInt(body.budgetMinor),
           model: body.model,
           ...(body.avatar ? { avatar: body.avatar } : {}),
@@ -174,6 +193,7 @@ Bun.serve({
             budgetMinor?: string;
             avatar?: string;
             header?: string;
+            permissions?: string[];
           };
           await update(runtime, id, {
             ...(changes.title === undefined ? {} : { title: changes.title }),
@@ -182,6 +202,7 @@ Bun.serve({
             ...(changes.budgetMinor === undefined ? {} : { budgetMinor: BigInt(changes.budgetMinor) }),
             ...(changes.avatar === undefined ? {} : { avatar: changes.avatar }),
             ...(changes.header === undefined ? {} : { header: changes.header }),
+            ...(changes.permissions === undefined ? {} : { permissions: changes.permissions }),
           });
           return json({ updated: true });
         }

@@ -324,6 +324,38 @@ console.log('\nCapability tokens\n');
   const wrongRoot = await verify(ROOT_KEY, 'someone.else.eth', child);
   check(!wrongRoot.ok && wrongRoot.reason === 'root', 'a token for another root is refused');
 
+  /*
+    Round-tripping a token that carries *every* kind of caveat, not just the one
+    the test happened to build. The wire format validates each kind by hand, so
+    a kind added to `encodeCaveat` and forgotten in `deserialize` produces a
+    token that mints, signs and verifies — and then fails to come back off the
+    wire. That is precisely what happened when `scope` was added: the algebra
+    and the signatures were right, and every capability became unreadable the
+    moment it crossed a process boundary.
+  */
+  const everything = await mint(ROOT_KEY, {
+    root: 'harsh.edgerouter.eth',
+    node: 'kitchen-sink',
+    ceilingMinor: 5_000n,
+    expiresAt: 20_000,
+    maxDepth: 3,
+    allowHosts: ['gate.example'],
+    scope: ['files:read', 'delegate'],
+  });
+  const everythingBack = deserialize(serialize(everything));
+  check(
+    everythingBack !== null && everythingBack.caveats.length === everything.caveats.length,
+    'a token carrying every caveat kind survives the wire format',
+  );
+  check(
+    everythingBack !== null && (await verify(ROOT_KEY, 'harsh.edgerouter.eth', everythingBack)).ok,
+    'and still verifies once it comes back',
+  );
+  check(
+    everythingBack !== null && allows(policyOf(everythingBack.caveats), 'delegate'),
+    'and its permissions survive the trip',
+  );
+
   const round = deserialize(serialize(child));
   check(round !== null && round.sig === child.sig, 'a token round-trips through the wire format');
   check(
