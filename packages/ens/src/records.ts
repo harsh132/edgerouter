@@ -255,6 +255,36 @@ export const setText = async (
  * chose to pay for. Only the keys actually passed are written, so editing a
  * description does not rewrite an avatar.
  */
+/** What a profile is, before anyone decides how to send it. */
+export type ProfileRecords = {
+  resolver: Address;
+  name: string;
+  display?: string;
+  avatar?: string;
+  header?: string;
+  description?: string;
+};
+
+/**
+ * The calls a profile is made of.
+ *
+ * Only the keys actually passed, which is the whole reason this is assembled
+ * rather than written wholesale: each one is storage on a resolver, and
+ * rewriting an untouched 1.7KB avatar because a description changed would be
+ * charging for nothing.
+ */
+export const profileCalls = (params: ProfileRecords): Call[] => {
+  const entries: [string, string][] = [
+    ...(params.display === undefined ? [] : ([[PROFILE.display, params.display]] as [string, string][])),
+    ...(params.avatar === undefined ? [] : ([[PROFILE.avatar, params.avatar]] as [string, string][])),
+    ...(params.header === undefined ? [] : ([[PROFILE.header, params.header]] as [string, string][])),
+    ...(params.description === undefined
+      ? []
+      : ([[PROFILE.description, params.description]] as [string, string][])),
+  ];
+  return entries.map(([key, value]) => textCall({ resolver: params.resolver, name: params.name, key, value }));
+};
+
 export const setProfile = async (
   clients: Clients,
   params: {
@@ -272,19 +302,7 @@ export const setProfile = async (
     description?: string;
   },
 ): Promise<Hash[]> => {
-  const entries: [string, string][] = [
-    ...(params.display === undefined ? [] : ([[PROFILE.display, params.display]] as [string, string][])),
-    ...(params.avatar === undefined ? [] : ([[PROFILE.avatar, params.avatar]] as [string, string][])),
-    ...(params.header === undefined ? [] : ([[PROFILE.header, params.header]] as [string, string][])),
-    ...(params.description === undefined
-      ? []
-      : ([[PROFILE.description, params.description]] as [string, string][])),
-  ];
-
-  return sendCalls(
-    clients,
-    entries.map(([key, value]) => textCall({ resolver: params.resolver, name: params.name, key, value })),
-  );
+  return sendCalls(clients, profileCalls(params));
 };
 
 type AgentRecords = {

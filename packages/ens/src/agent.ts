@@ -38,7 +38,7 @@ import { registryAbi } from './abi';
 import { sendCalls, type Call } from './batch';
 import { ensName } from './client';
 import { ALL_ROLES, deployRegistry, deployResolver } from './deploy';
-import { clearAddress, describeAgentCalls } from './records';
+import { clearAddress, describeAgentCalls, profileCalls, type ProfileRecords } from './records';
 
 type Clients = { public: PublicClient; wallet: WalletClient };
 
@@ -91,6 +91,14 @@ export type AgentName = {
   resolver: Address;
   /** Null when the name already existed, which is not a failure. */
   registerHash: Hash | null;
+  /**
+   * Whether the profile made it on chain.
+   *
+   * False means a name that works and has no picture — the mint was retried
+   * without it. Reported rather than thrown, because the agent is usable and
+   * the caller is the one who knows whether anybody needs telling.
+   */
+  profileWritten: boolean;
 };
 
 /**
@@ -120,6 +128,15 @@ export const mintAgentName = async (
     grantedMinor?: bigint;
     asset?: string;
     expiresAt?: number;
+    /**
+     * What the name says about itself, written in the same transaction.
+     *
+     * Optional, and passed here rather than written afterwards because there is
+     * no reason for a name and its face to be two transactions once they can be
+     * one. See the retry below for what happens when the picture is the thing
+     * that fails.
+     */
+    profile?: Omit<ProfileRecords, 'resolver' | 'name'>;
   },
 ): Promise<AgentName> => {
   const label = ensName(params.label);
@@ -204,10 +221,11 @@ export const mintAgentName = async (
 
   /*
     The whole mint, in one list: register the name, point it at an address, say
-    what it was granted. Batched this is a single receipt and an all-or-nothing
-    outcome; unbatched it is exactly the sequence it always was.
+    what it was granted, and — when there is one — put its face on it. Batched
+    this is a single receipt and an all-or-nothing outcome; unbatched it is
+    exactly the sequence it always was.
   */
-  const hashes = await sendCalls(clients, [
+  const essential = [
     ...(registerCall ? [registerCall] : []),
     ...describeAgentCalls({
       resolver,
@@ -217,7 +235,29 @@ export const mintAgentName = async (
       ...(params.asset ? { asset: params.asset } : {}),
       expiresAt,
     }),
-  ]);
+  ];
+  const decorative = params.profile ? profileCalls({ resolver, name, ...params.profile }) : [];
+
+  /*
+    The profile is attempted with the mint and retried without it.
+
+    Atomicity cuts both ways here. Putting the picture in the batch is free when
+    it works, and when it does not it takes the registration down with it — so a
+    malformed avatar would cost the name, which is a worse trade than the extra
+    transaction ever was. Retrying without the decorative calls means the
+    failure mode is an agent that exists and looks plain, which is the same
+    outcome the two-transaction version had, at one transaction when nothing is
+    wrong.
+  */
+  let profileWritten = decorative.length > 0;
+  let hashes: Hash[];
+  try {
+    hashes = await sendCalls(clients, [...essential, ...decorative]);
+  } catch (error) {
+    if (decorative.length === 0) throw error;
+    profileWritten = false;
+    hashes = await sendCalls(clients, essential);
+  }
 
   return {
     name,
@@ -231,6 +271,7 @@ export const mintAgentName = async (
       which is not a failure and never was.
     */
     registerHash: registerCall ? (hashes[0] ?? null) : null,
+    profileWritten,
   };
 };
 

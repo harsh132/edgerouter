@@ -23,6 +23,7 @@ import { registryAbi } from './abi';
 import { createEnsClient, ensName, type EnsClient } from './client';
 import { ENS } from './deployment';
 import { mintAgentName, type AgentName } from './agent';
+import type { ProfileRecords } from './records';
 
 /** The name every agent name hangs from. */
 export const ROOT_NAME = 'edgerouter.eth';
@@ -92,6 +93,8 @@ export const ensureAgentName = async (
     subdelegate?: boolean;
     grantedMinor?: bigint;
     asset?: string;
+    /** Written in the same transaction as the mint. See `mintAgentName`. */
+    profile?: Omit<ProfileRecords, 'resolver' | 'name'>;
     ens?: EnsClient;
   },
 ): Promise<EnsuredName> => {
@@ -110,6 +113,12 @@ export const ensureAgentName = async (
       registry,
       resolver,
       registerHash: null,
+      /*
+        A name that already existed was not given a profile by this call. Saying
+        it was written would be claiming credit for records that may not be
+        there at all.
+      */
+      profileWritten: false,
       minted: false,
     };
   }
@@ -129,6 +138,7 @@ export const ensureAgentName = async (
     ...(params.subdelegate === undefined ? {} : { subdelegate: params.subdelegate }),
     ...(params.grantedMinor === undefined ? {} : { grantedMinor: params.grantedMinor }),
     ...(params.asset ? { asset: params.asset } : {}),
+    ...(params.profile ? { profile: params.profile } : {}),
   });
 
   return { ...agent, minted: true };

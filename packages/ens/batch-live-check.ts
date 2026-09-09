@@ -7,7 +7,8 @@
  * matter, none of which can be established without a chain:
  *
  *   1. A whole mint is **one** transaction. Not "fewer" — one hash, one
- *      receipt, for a register and every record.
+ *      receipt, for a register, every record, and the profile including a data
+ *      URI avatar of the size a real sigil is.
  *   2. The account ends up delegated to our batcher and nothing else.
  *   3. `execute` refuses everyone but the account itself. This is the claim the
  *      whole design rests on, and it is the one that would be catastrophic and
@@ -28,6 +29,7 @@ import {
   ensureAgentName,
   openEnsSigner,
   parentOf,
+  PROFILE,
   RECORD,
   registryOf,
   revokeAgentName,
@@ -64,6 +66,16 @@ const minted = await ensureAgentName(clients, {
   owner: signer.address,
   grantedMinor: 1_000_000n,
   asset: 'hedera:testnet/native',
+  /*
+    A profile, because the point is that it rides along. The avatar is a data
+    URI of about the size a real sigil is — the largest single thing a mint
+    writes, and the one worth proving fits in the same transaction as the rest.
+  */
+  profile: {
+    display: 'Batch Check',
+    description: 'Proves a mint and its profile are one transaction.',
+    avatar: `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" fill="#123"/>${'<circle cx="64" cy="64" r="40" fill="#9cf"/>'.repeat(20)}</svg>`)}`,
+  },
 });
 const took = Date.now() - started;
 
@@ -97,6 +109,9 @@ check('the name resolves to the account', (await ens.addressOf(minted.name))?.to
 check('its grant was written in the same transaction', (await ens.textOf(minted.name, RECORD.granted)) === '1000000');
 check('its expiry was written too', Boolean(await ens.textOf(minted.name, RECORD.expires)));
 check('its parent is the hierarchy, not a record', parentOf(minted.name) === ROOT_NAME, parentOf(minted.name) ?? 'none');
+check('the profile went in the same transaction', minted.profileWritten);
+check('its display name is readable by any ENS client', (await ens.textOf(minted.name, PROFILE.display)) === 'Batch Check');
+check('its avatar survived the batch', ((await ens.textOf(minted.name, PROFILE.avatar)) ?? '').startsWith('data:image/svg+xml,'));
 
 /*
   The security claim, checked from an account that is not ours. A random key

@@ -263,33 +263,32 @@ export const hire = async (
           */
           subdelegate: false,
           grantedMinor: params.budgetMinor,
+          /*
+            The picture goes on chain in the same transaction as the name, under
+            the conventional ENS keys — so the agent has a face in the ENS
+            manager and anywhere else that resolves names, not only in this app.
+
+            Carried by the mint rather than written after it, because there is
+            no longer a reason for them to be two transactions. The caution this
+            replaces — a separate write, so a failed picture could not cost the
+            name — is kept where it belongs: `mintAgentName` retries without the
+            profile when the profile is what fails, so the bad case is still an
+            agent with a name and no face rather than no agent at all.
+          */
+          profile: {
+            description: agent.brief,
+            ...(agent.title ? { display: agent.title } : {}),
+            ...(agent.avatar ? { avatar: agent.avatar } : {}),
+            ...(agent.header ? { header: agent.header } : {}),
+          },
         },
       );
       agent.name = named.name;
       agent.ensParentRegistry = named.parentRegistry;
       agent.ensResolver = named.resolver;
 
-      /*
-        The picture goes on chain too, under the conventional ENS keys — so the
-        agent has a face in the ENS manager and anywhere else that resolves
-        names, not only in this app. Written after the name exists, and failing
-        separately: an agent with a name and no avatar works fine, and losing
-        the whole mint over a picture would be absurd.
-      */
-      try {
-        await setProfile(
-          { public: ens.public, wallet: ens.wallet },
-          {
-            resolver: named.resolver,
-            name: named.name,
-            description: agent.brief,
-            ...(agent.title ? { display: agent.title } : {}),
-            ...(agent.avatar ? { avatar: agent.avatar } : {}),
-            ...(agent.header ? { header: agent.header } : {}),
-          },
-        );
-      } catch (error) {
-        emit({ type: 'log', text: `${label}'s profile did not reach the chain: ${(error as Error).message}` });
+      if (!named.profileWritten) {
+        emit({ type: 'log', text: `${named.name} was minted, but its profile did not reach the chain` });
       }
     } catch (error) {
       emit({ type: 'log', text: `${label} has no ENS name: ${(error as Error).message}` });
