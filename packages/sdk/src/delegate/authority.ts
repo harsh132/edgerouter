@@ -93,6 +93,16 @@ export type AuthorityOptions = {
   /** Deepest delegation chain permitted. Unbounded chains amplify spend. */
   maxDepth?: number;
   /**
+   * What the root capability may do besides spend.
+   *
+   * Everything minted beneath it intersects with this, so it is the ceiling on
+   * permissions in the same way `fundedMinor` is the ceiling on money. Left
+   * unset it is empty: no agent can read a file or message another until
+   * somebody says which permissions exist here, which is the safe direction for
+   * a default to fail in.
+   */
+  scope?: readonly string[];
+  /**
    * Checks that a node's name still resolves, before anything is signed.
    *
    * This is what makes a name load-bearing rather than a label. The budget
@@ -174,6 +184,15 @@ export type Authority = {
     ceilingMinor?: bigint;
     allowHosts?: readonly string[];
     maxDepth?: number;
+    /**
+     * What the child may do besides spend.
+     *
+     * Intersected with the parent's, like hosts — a parent cannot grant a
+     * permission it does not hold, and omitting this inherits the parent's set
+     * rather than clearing it. A child that should do nothing but pay is minted
+     * with `scope: []`, which is a real and useful state.
+     */
+    scope?: readonly string[];
   }): Promise<Granted>;
   authorize(params: {
     token: Token;
@@ -210,6 +229,7 @@ export const createAuthority = async (options: AuthorityOptions): Promise<Author
     ceilingMinor: options.fundedMinor,
     expiresAt: now() + YEAR_MS,
     maxDepth,
+    ...(options.scope === undefined ? {} : { scope: options.scope }),
   });
 
   const encode = (token: Token): string => `er_${btoa(serialize(token))}`;
@@ -323,6 +343,27 @@ export const createAuthority = async (options: AuthorityOptions): Promise<Author
             ? params.allowHosts
             : params.allowHosts.filter((host) => parentPolicy.allowHosts!.includes(host));
 
+      /*
+        Permissions, narrowed the same way — and narrowed here as well as in the
+        caveat algebra on purpose. `restrict` would intersect them anyway when
+        the token is read, so this changes no outcome; what it changes is where
+        the answer is decided. A capability that carries a permission it can
+        never exercise is a capability that reads as more powerful than it is,
+        and the first person to debug one will believe the token over the rule.
+
+        A parent with no scope caveat holds *nothing*, so it hands out nothing —
+        `?? []` rather than the "null means unconstrained" reading hosts use.
+        The two differ because their fallbacks differ: an unrestricted host list
+        still has a ceiling behind it, an unrestricted permission set has
+        nothing behind it at all. Written the other way this granted
+        `files:host` to the child of a root that had never been given it.
+      */
+      const parentScope = parentPolicy.scope ?? [];
+      const scope =
+        params.scope === undefined
+          ? (parentPolicy.scope ?? undefined)
+          : params.scope.filter((granted) => parentScope.includes(granted));
+
       const moved = delegate(tree, {
         parent: params.parent.node,
         child: params.child,
@@ -350,6 +391,7 @@ export const createAuthority = async (options: AuthorityOptions): Promise<Author
         expiresAt,
         maxDepth: childDepth,
         ...(hosts === undefined ? {} : { allowHosts: hosts }),
+        ...(scope === undefined ? {} : { scope }),
       });
 
       return {

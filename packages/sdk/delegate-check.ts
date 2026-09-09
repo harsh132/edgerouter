@@ -26,7 +26,7 @@ import {
   type PaymentSigner,
 } from './src/index';
 import { attenuate, deserialize, serialize } from '../core/src/token';
-import { policyOf, isNarrowerOrEqual } from '../core/src/caveat';
+import { allows, policyOf, isNarrowerOrEqual } from '../core/src/caveat';
 
 let failures = 0;
 const check = (condition: boolean, message: string) => {
@@ -363,6 +363,97 @@ await refuses('pay_to_not_permitted', 'an unlisted payTo is refused whatever the
     requirements: quote({ payTo: '0.0.9999' }),
     resourceUrl: 'https://gate.example/v1/chat/completions',
   }),
+);
+
+/* ------------------------------------------------------------- permissions */
+
+section('Permissions narrow like everything else');
+
+/*
+  What an agent may *do*, as opposed to what it may spend. The authority
+  intersects these at mint time and the caveat algebra intersects them again at
+  read time; both are checked, because the two answers agreeing is the property
+  and either one alone is only half of it.
+*/
+const permissioned = await authorityWith({
+  fundedMinor: 10_000n,
+  scope: ['files:host', 'message:send', 'message:reply', 'delegate'],
+});
+
+const developer = await permissioned.mint({
+  parent: permissioned.rootToken,
+  child: 'developer',
+  amountMinor: 4_000n,
+  expiresAt: Date.now() + HOUR,
+  scope: ['files:host', 'message:send', 'delegate'],
+});
+check(allows(policyOf(developer.token.caveats), 'files:host'), 'a granted permission reaches the child');
+check(
+  !allows(policyOf(developer.token.caveats), 'message:reply'),
+  'a permission left out of the grant does not',
+);
+
+const reviewer = await permissioned.mint({
+  parent: developer.token,
+  child: 'reviewer',
+  amountMinor: 1_000n,
+  expiresAt: Date.now() + HOUR,
+  scope: ['message:reply', 'files:host'],
+});
+const reviewerPolicy = policyOf(reviewer.token.caveats);
+check(
+  allows(reviewerPolicy, 'files:host'),
+  'a grandchild keeps a permission its parent actually held',
+);
+check(
+  !allows(reviewerPolicy, 'message:reply'),
+  'and cannot gain one the parent lacked, however the parent asks',
+);
+check(
+  !allows(reviewerPolicy, 'message:send'),
+  'narrowing drops what the child did not ask to keep',
+);
+
+const inheriting = await permissioned.mint({
+  parent: developer.token,
+  child: 'inheritor',
+  amountMinor: 1n,
+  expiresAt: Date.now() + HOUR,
+});
+check(
+  allows(policyOf(inheriting.token.caveats), 'files:host'),
+  'omitting scope inherits the parent set rather than clearing it',
+);
+
+const paying = await permissioned.mint({
+  parent: developer.token,
+  child: 'payer-only',
+  amountMinor: 1n,
+  expiresAt: Date.now() + HOUR,
+  scope: [],
+});
+const payingPolicy = policyOf(paying.token.caveats);
+check(
+  !allows(payingPolicy, 'files:host') && !allows(payingPolicy, 'delegate'),
+  'an empty scope is a capability that may pay and nothing else',
+);
+
+/*
+  A root that was never told which permissions exist grants none. This is the
+  asymmetry with hosts, and it is deliberate: an unset host list still has a
+  ceiling behind it, and an unset scope has nothing behind it at all.
+*/
+const unscoped = await authorityWith({ fundedMinor: 10n });
+const unscopedChild = await unscoped.mint({
+  parent: unscoped.rootToken,
+  child: 'nobody',
+  amountMinor: 1n,
+  expiresAt: Date.now() + HOUR,
+  scope: ['files:host'],
+});
+check(
+  !allows(policyOf(unscopedChild.token.caveats), 'files:host'),
+  'an authority with no scope of its own cannot hand one out',
 );
 
 /* -------------------------------------------------------------- revocation */

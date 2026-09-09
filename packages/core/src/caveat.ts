@@ -34,7 +34,34 @@ export type Caveat =
    * unbounded chain is a spend amplifier: each level costs the attacker nothing
    * and multiplies the number of live capabilities.
    */
-  | { kind: 'depth'; max: number };
+  | { kind: 'depth'; max: number }
+  /**
+   * What this capability may do, beyond spending.
+   *
+   * Reading a file, messaging another agent, granting a project to a third —
+   * the things an agent does that are not payments. Deliberately the same shape
+   * as `host`, and for the same reason: combination is set intersection, so a
+   * child can narrow the list but can never introduce a permission its parent
+   * did not hold. That property is not re-argued here, it is the one
+   * `check.ts` already tests over generated caveat orders.
+   *
+   * ## Exact strings, no patterns
+   *
+   * `files:read:notes` and `files:read:*` are two unrelated strings, and there
+   * is no rule that makes the second imply the first. A wildcard would have to
+   * be interpreted at intersection time, and an interpretation is exactly the
+   * place a widening can hide — `a ∩ b` is a proof, `matches(a, b)` is an
+   * opinion. Grant the permissions you mean.
+   *
+   * ## Why nothing here means "all"
+   *
+   * There is no permission that grants future permissions. A capability is
+   * signed over the caveats it carries, and a token naming a set that grows
+   * after signing would hand its holder powers nobody consented to — the
+   * consent was to the set as it stood. Adding a permission kind must reach
+   * nobody until somebody grants it.
+   */
+  | { kind: 'scope'; allow: readonly string[] };
 
 export type CaveatKind = Caveat['kind'];
 
@@ -51,6 +78,8 @@ export type Policy = {
   expiresAt: number | null;
   allowHosts: readonly string[] | null;
   maxDepth: number | null;
+  /** Permissions granted, or null when no scope caveat has been seen. */
+  scope: readonly string[] | null;
 };
 
 export const UNRESTRICTED: Policy = {
@@ -58,6 +87,7 @@ export const UNRESTRICTED: Policy = {
   expiresAt: null,
   allowHosts: null,
   maxDepth: null,
+  scope: null,
 };
 
 const minBig = (a: bigint | null, b: bigint): bigint => (a === null || b < a ? b : a);
@@ -79,6 +109,17 @@ export const restrict = (policy: Policy, caveat: Caveat): Policy => {
 
     case 'depth':
       return { ...policy, maxDepth: minNum(policy.maxDepth, caveat.max) };
+
+    case 'scope': {
+      // Intersection, exactly as `host` below. Written out rather than shared
+      // with it because the two are the same operation on different meanings,
+      // and a helper taking a field name would make a future widening a typo
+      // rather than a rewrite.
+      const incoming = new Set(caveat.allow);
+      const allow =
+        policy.scope === null ? [...incoming] : policy.scope.filter((granted) => incoming.has(granted));
+      return { ...policy, scope: allow };
+    }
 
     case 'host': {
       // Intersection, not replacement. A child listing a host its parent never
@@ -109,8 +150,30 @@ export const isNarrowerOrEqual = (a: Policy, b: Policy): boolean => {
     const permitted = new Set(b.allowHosts);
     if (a.allowHosts.some((host) => !permitted.has(host))) return false;
   }
+  if (b.scope !== null) {
+    if (a.scope === null) return false;
+    const permitted = new Set(b.scope);
+    if (a.scope.some((granted) => !permitted.has(granted))) return false;
+  }
   return true;
 };
+
+/**
+ * Whether a policy carries one permission.
+ *
+ * Fail-closed on the unconstrained case, and that is the one deliberate
+ * asymmetry with `host`. An absent host list means "pay anyone", which is
+ * survivable because a payment still has to clear a ceiling. An absent scope
+ * would mean "do anything", which nothing else bounds — so a capability minted
+ * without a scope caveat can read no files, message nobody, and grant nothing.
+ *
+ * The cost of that choice is that forgetting to mint a scope produces an agent
+ * that cannot act rather than one that can act freely, which is the failure
+ * that gets noticed in the first ten seconds instead of the one that gets
+ * noticed by someone else.
+ */
+export const allows = (policy: Policy, permission: string): boolean =>
+  policy.scope !== null && policy.scope.includes(permission);
 
 export type Denial =
   | { ok: true }

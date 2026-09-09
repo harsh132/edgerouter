@@ -10,6 +10,7 @@
  *   bun packages/core/check.ts [seed]
  */
 import {
+  allows,
   isNarrowerOrEqual,
   permits,
   policyOf,
@@ -56,14 +57,37 @@ const pick = <T>(xs: readonly T[]): T => xs[randInt(xs.length)]!;
 
 const HOSTS = ['api.openrouter.ai', 'gate.edgerouter.io', 'x.example', 'y.example', 'z.example'];
 
+/*
+  Shaped like the real vocabulary rather than as `a`/`b`/`c`, so a generated
+  counterexample reads as something that could actually be granted. The
+  `project:` entries carry opaque ids on purpose: a permission naming a path
+  would put that path in every capability that quotes it.
+*/
+const PERMISSIONS = [
+  'files:read:own',
+  'files:write:own',
+  'files:host',
+  'project:prj_7f3a:read',
+  'project:prj_7f3a:write',
+  'message:send',
+  'message:reply',
+  'delegate',
+  'budget:request',
+];
+
 const randomCaveat = (): Caveat => {
-  switch (randInt(4)) {
+  switch (randInt(5)) {
     case 0:
       return { kind: 'ceiling', minor: BigInt(randInt(100_000) + 1) };
     case 1:
       return { kind: 'expires', at: 1_000_000 + randInt(1_000_000) };
     case 2:
       return { kind: 'depth', max: randInt(6) };
+    case 3:
+      return {
+        kind: 'scope',
+        allow: PERMISSIONS.filter(() => rand() < 0.6),
+      };
     default:
       return {
         kind: 'host',
@@ -140,6 +164,57 @@ console.log(`seed ${SEED}\n\nAttenuation algebra\n`);
     !(narrowed.allowHosts ?? []).includes('zzz'),
     'a child cannot add a host its parent never had',
   );
+
+  /* ---- scope ------------------------------------------------------------ */
+
+  const scoped = policyOf([
+    { kind: 'ceiling', minor: 500n },
+    { kind: 'expires', at: 10_000 },
+    { kind: 'scope', allow: ['files:read:own', 'message:reply'] },
+  ]);
+  check(allows(scoped, 'files:read:own'), 'a granted permission is allowed');
+  check(!allows(scoped, 'message:send'), 'a permission never granted is refused');
+
+  const reviewer = restrict(scoped, { kind: 'scope', allow: ['message:reply', 'files:host'] });
+  check(
+    allows(reviewer, 'message:reply') && !allows(reviewer, 'files:host'),
+    'a child cannot add a permission its parent never had',
+  );
+  check(
+    !allows(reviewer, 'files:read:own'),
+    'a child narrowing scope drops what it left out',
+  );
+
+  /*
+    The asymmetry with hosts, checked rather than commented. An absent host list
+    means "pay anyone" and is survivable because a ceiling still binds; an
+    absent scope must mean "do nothing", because nothing else bounds it.
+  */
+  check(!allows(UNRESTRICTED, 'files:read:own'), 'a capability with no scope caveat may do nothing');
+
+  /*
+    An empty intersection is a real state. Special-casing it into "no
+    restriction" is the specific bug this guards, and it is one character of
+    difference in `restrict`.
+  */
+  const disjoint = restrict(scoped, { kind: 'scope', allow: ['delegate'] });
+  check(
+    (disjoint.scope ?? null) !== null && disjoint.scope!.length === 0,
+    'an empty intersection is empty, not unrestricted',
+  );
+  check(!allows(disjoint, 'delegate'), 'and it permits nothing');
+
+  /*
+    There is no permission that means "everything". Checked here so that adding
+    one has to delete a test rather than merely slip past review — a token
+    naming a set that grows after it was signed grants powers nobody consented
+    to.
+  */
+  const wildcard = policyOf([{ kind: 'scope', allow: ['*', 'all'] }]);
+  check(
+    !allows(wildcard, 'files:host') && !allows(wildcard, 'delegate'),
+    'no string is treated as a wildcard over other permissions',
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -175,6 +250,56 @@ console.log('\nCapability tokens\n');
     widenedVerified.ok && widenedVerified.policy.ceilingMinor === 1_000n,
     'appending a larger ceiling does not raise it',
   );
+
+  /*
+    Scope through the signature chain, not just through `policyOf`. The algebra
+    being right is worth nothing if the caveat is not covered by the HMAC —
+    that is the difference between a permission and a suggestion.
+  */
+  const permitted = await mint(ROOT_KEY, {
+    root: 'harsh.edgerouter.eth',
+    node: 'developer',
+    ceilingMinor: 10_000n,
+    expiresAt: 10_000,
+    scope: ['files:host', 'message:send', 'delegate'],
+  });
+  const scopedVerified = await verify(ROOT_KEY, 'harsh.edgerouter.eth', permitted);
+  check(
+    scopedVerified.ok && allows(scopedVerified.policy, 'files:host'),
+    'a minted scope survives verification',
+  );
+
+  const delegated = await attenuate(permitted, [{ kind: 'scope', allow: ['message:reply'] }]);
+  const delegatedVerified = await verify(ROOT_KEY, 'harsh.edgerouter.eth', delegated);
+  check(
+    delegatedVerified.ok && !allows(delegatedVerified.policy, 'files:host'),
+    'attenuating scope removes what was not carried forward',
+  );
+  check(
+    delegatedVerified.ok && !allows(delegatedVerified.policy, 'message:reply'),
+    'and a permission the parent never held is not gained by asking for it',
+  );
+
+  /*
+    `host:x` and `scope:x` must not encode to the same bytes. Two caveats with
+    one encoding would be interchangeable inside a chain, which would let a
+    permission be spent as a host restriction or the reverse.
+  */
+  const asHost = await mint(ROOT_KEY, {
+    root: 'r',
+    node: 'n',
+    ceilingMinor: 1n,
+    expiresAt: 1,
+    allowHosts: ['x'],
+  });
+  const asScope = await mint(ROOT_KEY, {
+    root: 'r',
+    node: 'n',
+    ceilingMinor: 1n,
+    expiresAt: 1,
+    scope: ['x'],
+  });
+  check(asHost.sig !== asScope.sig, 'a host and a permission with the same name sign differently');
 
   // Removing a caveat is the real attack. It must fail the signature.
   const stripped = { ...child, caveats: child.caveats.slice(0, -1) };
