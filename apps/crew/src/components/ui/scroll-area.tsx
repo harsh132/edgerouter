@@ -15,7 +15,20 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
+        /*
+          `[&>div]:!block` is not cosmetic.
+
+          Radix wraps whatever you put in the viewport in an element it styles
+          `display: table; min-width: 100%`. A table shrink-wraps to its widest
+          content, so a row that should be 271px wide becomes 760px, overflows
+          the panel, is clipped at its edge, and never truncates — because from
+          the row's point of view it has all the width it asked for. It reads as
+          a broken panel with text running off the side.
+
+          Forcing the wrapper back to a block gives children the viewport's
+          width, which is what every `truncate` in here already assumes.
+        */
+        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 [&>div]:!block [&>div]:!min-w-0"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>
