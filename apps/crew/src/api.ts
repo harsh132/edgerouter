@@ -142,11 +142,41 @@ export const useCrew = (): { state: State | null; connected: boolean; log: strin
       const event = JSON.parse(message.data) as
         | { type: 'state'; state: State }
         | { type: 'log'; text: string }
+        | { type: 'delta'; agentId: string; n: number; text: string }
         | { type: 'step' | 'status' };
 
       if (event.type === 'state') {
         setState(event.state);
         setConnected(true);
+      } else if (event.type === 'delta') {
+        /*
+          Patched in place rather than answered with a fresh state.
+
+          A delta arrives for every chunk the model produces, and rebuilding the
+          whole roster that often would send the entire crew — every agent,
+          every task, every step — down the wire several times a second to
+          change one string. The step being written already exists here; it is
+          found by agent and step number, because those are stable and array
+          positions are not.
+        */
+        setState((previous) => {
+          if (!previous) return previous;
+          return {
+            ...previous,
+            agents: previous.agents.map((agent) => {
+              if (agent.id !== event.agentId) return agent;
+              const tasks = [...agent.tasks];
+              const last = tasks.length - 1;
+              const task = tasks[last];
+              if (!task) return agent;
+              tasks[last] = {
+                ...task,
+                steps: task.steps.map((step) => (step.n === event.n ? { ...step, text: event.text } : step)),
+              };
+              return { ...agent, tasks };
+            }),
+          };
+        });
       } else if (event.type === 'log') {
         /*
           Kept short on purpose. This is the line under the roster that says

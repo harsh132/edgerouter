@@ -12,6 +12,15 @@
 export type CrewEvent =
   | { type: 'crew'; agents: unknown[] }
   | { type: 'step'; agentId: string; step: unknown; spentMinor: string }
+  /**
+   * Text arriving, while it is still arriving.
+   *
+   * Its own kind rather than a `step`, because a step carries a price and a
+   * duration and a delta carries neither — the call has not finished, so
+   * nothing about what it cost is known yet. Deltas are also never written to
+   * disk: the crew file is what exists, and a half-written sentence does not.
+   */
+  | { type: 'delta'; agentId: string; n: number; text: string }
   | { type: 'status'; agentId: string; status: string; detail?: string }
   | { type: 'log'; text: string };
 

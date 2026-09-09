@@ -217,6 +217,31 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
   */
   let completed = 0;
   const unsubscribe = pi.subscribe((event) => {
+    /*
+      The reply as it is being written.
+
+      Streaming was on for every hop but the last one: the gate returns the
+      upstream body untouched, the paying fetch hands that Response straight
+      back, and pi streams from it and says so — this subscription simply
+      ignored everything except `message_end`, so a reply that took five seconds
+      to generate appeared all at once at the end of them.
+
+      Nothing is persisted here and nothing is priced here. The step already
+      exists, because it was created when the call was paid for; this only fills
+      in what it says.
+    */
+    if (event.type === 'message_update') {
+      const partial = event.message as { role?: string; content?: unknown };
+      if (partial.role !== 'assistant') return;
+      const step = task.steps[completed];
+      if (!step) return;
+      const text = textOf(partial.content);
+      if (!text || text === step.text) return;
+      step.text = text;
+      emit({ type: 'delta', agentId: agent.id, n: step.n, text });
+      return;
+    }
+
     if (event.type !== 'message_end') return;
     const message = event.message as { role?: string; content?: unknown };
     if (message.role !== 'assistant') return;
