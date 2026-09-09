@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { AgentMark } from './agent-mark';
+import { BudgetRequestCard } from './budget-request';
 import { EditDialog } from './edit-dialog';
 import { Receipt } from './receipt';
 import { ToolCall } from './tool-call';
@@ -86,6 +87,12 @@ const TaskView = ({ task, network }: { task: Task; network: string }) => (
 );
 
 export const AgentThread = ({ agent, state }: { agent: Agent; state: State }) => {
+  /*
+    A request belongs to whichever agent raised it, and only one can be open at
+    a time — the runtime refuses a second while the first is unanswered, so a
+    person never faces a stack of identical cards.
+  */
+  const request = state.requests.find((waiting) => waiting.agentId === agent.id);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement | null>(null);
@@ -158,7 +165,9 @@ export const AgentThread = ({ agent, state }: { agent: Agent; state: State }) =>
             <TaskView key={task.id} task={task} network={agent.network} />
           ))}
 
-          {agent.running ? <Typing /> : null}
+          {request ? <BudgetRequestCard request={request} agent={agent} /> : null}
+
+          {agent.running && !request ? <Typing /> : null}
 
           <div ref={bottom} />
         </div>

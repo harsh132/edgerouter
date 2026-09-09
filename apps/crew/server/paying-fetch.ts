@@ -27,10 +27,20 @@ export class BudgetExhausted extends Error {
 }
 
 export const payingFetch = (params: {
-  signer: PaymentSigner;
+  /**
+   * Resolved per call, not captured once.
+   *
+   * A budget raised mid-task re-mints the capability, and the old one is
+   * withdrawn from the tree as it goes — so a fetch holding the signer it was
+   * built with would keep presenting a capability that no longer names
+   * anything, and the approval that was meant to let the agent continue would
+   * be the thing that stopped it. Asking for the current signer each time costs
+   * a map lookup.
+   */
+  signer: () => PaymentSigner;
   network: string;
   /** The most any single call may cost. A guard against a mispriced quote. */
-  maxAmountMinor: bigint;
+  maxAmountMinor: () => bigint;
   /**
    * What the agent has left, which is not always the same number.
    *
@@ -40,7 +50,7 @@ export const payingFetch = (params: {
    * problem with the quote; "this call costs more than everything you have
    * left" is simply being broke. Without this number they are the same refusal.
    */
-  remainingMinor: bigint;
+  remainingMinor: () => bigint;
   onSpend: (spend: Spend) => void;
   /**
    * Told when the authority refuses, because throwing is not enough.
@@ -52,11 +62,36 @@ export const payingFetch = (params: {
    * says what it was, to whoever is going to have to explain it.
    */
   onRefusal?: (refusal: BudgetExhausted) => void;
+  /**
+   * Last chance to find more money, at the moment it runs out.
+   *
+   * Asking has to happen here rather than as something the agent chooses to do,
+   * because the refusal arrives where the agent has no turn: a payment is
+   * declined between one step and the next, the loop dies, and the model is
+   * never asked what it would like to do about it. Watched happening —
+   * an agent told to check its budget and ask first spent its one remaining
+   * call listing a directory and was refused on the next, having never reached
+   * a point where calling a tool was possible.
+   *
+   * Returns whether more budget arrived. True means retry; the capability has
+   * been re-minted by then, and the signer is read fresh per call for exactly
+   * this reason.
+   */
+  onExhausted?: (shortfall: { remainingMinor: bigint }) => Promise<boolean>;
 }): typeof globalThis.fetch => {
   return async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const started = Date.now();
 
+    /*
+      One retry, and only after a person has granted more. Retrying a refusal
+      for any other reason is pointless — the budget will not have refilled
+      between attempts — and retrying twice after an approval would mean a
+      single call able to ask for money repeatedly.
+    */
+    let retried = false;
+
+    const attempt = async (): Promise<Response> => {
     try {
       /*
         The body is narrowed to a string because a payment is signed over the
@@ -71,9 +106,9 @@ export const payingFetch = (params: {
       }
 
       const result = await payAndFetch(url, {
-        signer: params.signer,
+        signer: params.signer(),
         network: params.network,
-        maxAmount: params.maxAmountMinor,
+        maxAmount: params.maxAmountMinor(),
         init: {
           ...(init?.method ? { method: init.method } : {}),
           ...(init?.headers ? { headers: init.headers as Record<string, string> } : {}),
@@ -96,10 +131,17 @@ export const payingFetch = (params: {
         reported through `onRefusal`, because the type does not survive the
         trip through pi.
       */
-      if (error instanceof AuthorityDenied) {
-        const refusal = new BudgetExhausted(error.message);
+      const exhausted = async (refusal: BudgetExhausted): Promise<Response> => {
+        if (params.onExhausted && !retried) {
+          retried = true;
+          if (await params.onExhausted({ remainingMinor: params.remainingMinor() })) return attempt();
+        }
         params.onRefusal?.(refusal);
         throw refusal;
+      };
+
+      if (error instanceof AuthorityDenied) {
+        return exhausted(new BudgetExhausted(error.message));
       }
 
       /*
@@ -112,17 +154,28 @@ export const payingFetch = (params: {
         arriving at the user as "Connection error." like everything else.
       */
       if (error instanceof PaymentRefused && error.reason === 'over_max_amount') {
-        const broke = params.maxAmountMinor >= params.remainingMinor;
+        const remaining = params.remainingMinor();
+        const broke = params.maxAmountMinor() >= remaining;
         const refusal = new BudgetExhausted(
           broke
-            ? `the next call costs more than the ${params.remainingMinor} it has left`
+            ? `the next call costs more than the ${remaining} it has left`
             : `a single call was quoted above this agent's per-call cap: ${error.message}`,
         );
+        /*
+          Only being broke is worth asking about. A quote above the per-call cap
+          leaves the agent with money and means the price was wrong, and raising
+          the budget over it would turn a guard against mispricing into a way of
+          paying whatever was asked.
+        */
+        if (broke) return exhausted(refusal);
         params.onRefusal?.(refusal);
         throw refusal;
       }
 
       throw error;
     }
+    };
+
+    return attempt();
   };
 };

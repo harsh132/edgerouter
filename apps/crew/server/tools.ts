@@ -37,6 +37,7 @@ import { readFile, writeFile, readdir, stat, mkdir, realpath } from 'node:fs/pro
 import { homedir } from 'node:os';
 import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
 import type { Permission } from './permissions';
+import { formatAmount, parseAmount } from '../../../packages/sdk/src/index';
 
 const WORKSPACES = join(homedir(), '.edgerouter', 'workspaces');
 
@@ -111,10 +112,29 @@ const tool = <T extends TSchema>(
  * the list is built once per run, and a later refactor rebuilding it from
  * something staler should fail closed rather than quietly grant.
  */
-export const toolsFor = (
-  label: string,
-  allows: (permission: Permission) => boolean,
-): AgentTool[] => {
+export type ToolContext = {
+  label: string;
+  allows: (permission: Permission) => boolean;
+  /**
+   * Asks a person for more budget and waits for the answer.
+   *
+   * Supplied by the runtime because the tool cannot do any part of it itself:
+   * the agent holds no key, cannot mint an allowance, and must not be able to.
+   * All it can do is put the question somewhere a human will see it.
+   */
+  askForBudget: (amountMinor: bigint, reason: string) => Promise<string>;
+  /** What it has left, for a tool that has to talk about money. */
+  network: string;
+  remainingMinor: () => bigint;
+};
+
+export const toolsFor = ({
+  label,
+  allows,
+  askForBudget,
+  network,
+  remainingMinor,
+}: ToolContext): AgentTool[] => {
   const room = workspaceFor(label);
 
   /*
@@ -240,6 +260,48 @@ export const toolsFor = (
 
         await walk(room);
         return hits.length > 0 ? hits.join('\n') : 'Nothing matched.';
+      },
+    }),
+    ]),
+
+    ...granted('budget:request', [
+    tool({
+      name: 'request_budget',
+      label: 'Ask for more budget',
+      description:
+        'Ask the person who hired you to raise your spending limit. Use this only when a task genuinely ' +
+        'needs more than you have left, and say plainly what the rest will be spent on. They may grant ' +
+        'less than you ask for, or nothing. Waiting for an answer costs you nothing, but it may take ' +
+        'minutes, and the answer may be no.',
+      parameters: Type.Object({
+        amount: Type.String({
+          description: 'How much more you need, written the way the amount is shown to you, e.g. "0.2".',
+        }),
+        reason: Type.String({
+          description: 'What the extra budget is for. One sentence. This is shown to a person, unedited.',
+        }),
+      }),
+      run: async ({ amount, reason }) => {
+        needs('budget:request');
+
+        let amountMinor: bigint;
+        try {
+          amountMinor = parseAmount(network, amount);
+        } catch (error) {
+          return `${(error as Error).message}. Ask for a plain number, like "0.2".`;
+        }
+        if (amountMinor <= 0n) return 'Ask for an amount greater than zero.';
+
+        /*
+          The reason is required to be its own, not the task's. A request that
+          says "I need more budget" tells the person nothing they did not
+          already know from the fact of being asked.
+        */
+        if (reason.trim().length < 10) {
+          return 'Say what the extra budget is for, in a sentence. Whoever answers needs it to decide.';
+        }
+
+        return askForBudget(amountMinor, reason.trim());
       },
     }),
     ]),

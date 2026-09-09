@@ -22,6 +22,15 @@ export type CrewEvent =
    */
   | { type: 'delta'; agentId: string; n: number; text: string }
   | { type: 'status'; agentId: string; status: string; detail?: string }
+  /**
+   * A budget request appeared or was answered.
+   *
+   * Carries nothing. The list lives in the runtime and the page re-reads the
+   * whole state, which is the same choice `crew` makes and for the same reason:
+   * a roster of a few dozen is cheap to resend, and a patch that can disagree
+   * with the truth is not.
+   */
+  | { type: 'requests' }
   | { type: 'log'; text: string };
 
 type Listener = (event: CrewEvent) => void;

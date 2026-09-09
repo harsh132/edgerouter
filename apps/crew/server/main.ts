@@ -24,6 +24,7 @@ import { subscribe } from './events';
 import { MODELS } from './model';
 import { DEFAULT_PERMISSIONS, PERMISSIONS } from './permissions';
 import { FILE_PATH } from './store';
+import { pending, settle } from './requests';
 
 /*
   Declared rather than imported from `@types/bun`.
@@ -79,6 +80,12 @@ const stateOf = (runtime: Runtime) => ({
     default: (DEFAULT_PERMISSIONS as string[]).includes(name),
   })),
   file: FILE_PATH,
+  /*
+    Live, and never from disk. A pending request belongs to a paused tool call
+    inside a running task; there is nothing to restore after a restart, because
+    the thing that was waiting is gone.
+  */
+  requests: pending(),
   agents: runtime.crew.agents.map((agent) => ({
     ...agent,
     running: isRunning(agent.id),
@@ -133,7 +140,11 @@ Bun.serve({
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
           send({ type: 'state', state: stateOf(runtime) });
           const unsubscribe = subscribe((event) => {
-            send(event.type === 'crew' ? { type: 'state', state: stateOf(runtime) } : event);
+            send(
+              event.type === 'crew' || event.type === 'requests'
+                ? { type: 'state', state: stateOf(runtime) }
+                : event,
+            );
           });
           request.signal.addEventListener('abort', () => {
             unsubscribe();
@@ -176,6 +187,33 @@ Bun.serve({
       } catch (error) {
         return json({ error: (error as Error).message }, 400);
       }
+    }
+
+    /*
+      Answering an agent's request for more budget. Approval carries an amount
+      rather than a yes, because a person who reads "needs 2 ℏ to finish" and
+      thinks "a tenth of that" should be able to say so — and because a granted
+      amount somebody typed is a limit they set rather than one they waved
+      through.
+    */
+    const answering = /^\/api\/requests\/([^/]+)\/(approve|decline)$/.exec(path);
+    if (request.method === 'POST' && answering) {
+      const [, id, verdict] = answering as unknown as [string, string, string];
+
+      if (verdict === 'decline') {
+        return json({ answered: settle(id, { approved: false, why: 'the request was declined' }) });
+      }
+
+      const body = (await request.json().catch(() => ({}))) as { grantedMinor?: string };
+      let grantedMinor: bigint;
+      try {
+        grantedMinor = BigInt(body.grantedMinor ?? '0');
+      } catch {
+        return json({ error: 'that is not an amount' }, 400);
+      }
+      if (grantedMinor <= 0n) return json({ error: 'grant more than nothing, or decline' }, 400);
+
+      return json({ answered: settle(id, { approved: true, grantedMinor }) });
     }
 
     const match = /^\/api\/agents\/([^/]+)\/(task|stop|fire|edit)$/.exec(path);

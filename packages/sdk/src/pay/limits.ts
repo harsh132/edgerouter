@@ -40,6 +40,32 @@ export const defaultMaxAmount = (network: string): bigint =>
 export const formatAmount = (network: string, minor: bigint): string =>
   network.startsWith('hedera:') ? formatHbar(minor) : formatUsdc(minor);
 
+/** Decimal places, per network. The one fact both directions need. */
+const decimalsOf = (network: string): number => (network.startsWith('hedera:') ? 8 : 6);
+
+/**
+ * The inverse of `formatAmount`: a written amount back into smallest units.
+ *
+ * Parsed by string rather than through a float, because `0.1` is not
+ * representable in binary and `Number('0.07') * 1e8` is `7000000.000000001` —
+ * which rounds to a different number of tinybars than the user typed. Money
+ * that changes when it passes through a parser is not money anyone can audit.
+ *
+ * Throws on anything that is not a plain decimal. There is no sensible bigint
+ * for "about a tenth", and guessing one costs whatever the guess was wrong by.
+ */
+export const parseAmount = (network: string, text: string): bigint => {
+  const trimmed = text.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) throw new Error(`"${text}" is not an amount`);
+
+  const decimals = decimalsOf(network);
+  const [whole = '0', fraction = ''] = trimmed.split('.');
+  if (fraction.length > decimals) {
+    throw new Error(`${network} has ${decimals} decimal places; "${text}" has more`);
+  }
+  return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, '0') || '0');
+};
+
 /** What the smallest unit is called here. For messages that name the unit. */
 export const unitName = (network: string): string =>
   network.startsWith('hedera:') ? 'tinybars' : 'the asset’s smallest unit';

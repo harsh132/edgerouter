@@ -21,11 +21,12 @@
 import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import { randomUUID } from 'node:crypto';
-import { formatAmount } from '../../../packages/sdk/src/index';
+import { defaultMaxAmount, formatAmount } from '../../../packages/sdk/src/index';
 import { allows as permitted } from '../../../packages/core/src/caveat';
 import { modelFor } from './model';
 import { payingFetch, BudgetExhausted } from './paying-fetch';
-import { connectionFor, publish, type Runtime } from './crew';
+import { connectionFor, publish, update, type Runtime } from './crew';
+import { ask, abandon } from './requests';
 import { toolsFor } from './tools';
 import { ALL_PERMISSIONS, type Permission } from './permissions';
 import { emit } from './events';
@@ -90,36 +91,6 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
     real reason is gone. So the refusal is recorded when it happens, and the
     outcome below trusts this over anything pi has to say.
   */
-  let denied: BudgetExhausted | null = null;
-
-  const fetch = payingFetch({
-    signer: connection.signer,
-    network: agent.network,
-    maxAmountMinor: perCallCeiling(agent),
-    remainingMinor: BigInt(agent.budgetMinor) - BigInt(agent.spentMinor),
-    onSpend: ({ costMinor, ms }) => {
-      agent.spentMinor = (BigInt(agent.spentMinor) + costMinor).toString();
-      const step: Step = {
-        n: task.steps.length + 1,
-        at: Date.now(),
-        text: '',
-        costMinor: costMinor.toString(),
-        ms,
-      };
-      task.steps.push(step);
-      emit({ type: 'step', agentId: agent.id, step, spentMinor: agent.spentMinor });
-      publish(runtime);
-    },
-    /*
-      Kept here rather than relied on from the throw. pi swallows the error and
-      substitutes its own text, so by the time the run ends the only evidence
-      that an agent ran out of money is this.
-    */
-    onRefusal: (refusal) => {
-      denied = refusal;
-    },
-  });
-
   /*
     What this agent may do, read out of the capability it is about to spend
     with rather than out of the crew file beside it.
@@ -141,6 +112,65 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
         .catch(() => null)
     : null;
   const allows = (permission: Permission): boolean => policy !== null && permitted(policy, permission);
+
+  let denied: BudgetExhausted | null = null;
+
+  const fetch = payingFetch({
+    /*
+      Read live rather than captured. An approved budget request re-mints the
+      capability while this task is still running, so the signer, the ceiling
+      and the remainder all change underneath it — and a fetch built from the
+      values as they were would keep presenting a withdrawn capability against a
+      limit that no longer applies.
+    */
+    signer: () => runtime.connections.get(agent.id)?.signer ?? connection.signer,
+    network: agent.network,
+    maxAmountMinor: () => perCallCeiling(agent),
+    remainingMinor: () => BigInt(agent.budgetMinor) - BigInt(agent.spentMinor),
+    onSpend: ({ costMinor, ms }) => {
+      agent.spentMinor = (BigInt(agent.spentMinor) + costMinor).toString();
+      const step: Step = {
+        n: task.steps.length + 1,
+        at: Date.now(),
+        text: '',
+        costMinor: costMinor.toString(),
+        ms,
+      };
+      task.steps.push(step);
+      emit({ type: 'step', agentId: agent.id, step, spentMinor: agent.spentMinor });
+      publish(runtime);
+    },
+    /*
+      Kept here rather than relied on from the throw. pi swallows the error and
+      substitutes its own text, so by the time the run ends the only evidence
+      that an agent ran out of money is this.
+    */
+    onRefusal: (refusal) => {
+      denied = refusal;
+    },
+    /*
+      Asked on the agent's behalf, at the moment the money runs out.
+
+      The agent holds the permission; the runtime raises the question, because
+      the refusal happens where the agent has no turn. The reason says so
+      plainly rather than putting words in its mouth — whoever reads the card is
+      deciding whether to fund the task on screen, and a sentence pretending to
+      be the agent's would be this app inventing a justification for spending.
+    */
+    ...(allows('budget:request')
+      ? {
+          onExhausted: async () => {
+            const answer = await askForBudget(
+              runtime,
+              agent,
+              topUpFor(agent, task),
+              `it ran out part-way through “${prompt.trim().slice(0, 120)}” and cannot continue without more`,
+            );
+            return answer.startsWith('Approved');
+          },
+        }
+      : {}),
+  });
 
   const missing = ALL_PERMISSIONS.filter((permission) => !allows(permission));
 
@@ -174,9 +204,26 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
         agent.brief.trim(),
         '',
         `You are ${agent.title ?? agent.label}${agent.name ? ` (${agent.name})` : ''}, an autonomous agent.`,
-        'Every reply you generate is paid for out of a budget you cannot raise,',
-        'and every tool call is a step you pay for too. Work in as few steps as',
-        'you can, and stop when the task is done.',
+        'Every reply you generate is paid for out of a budget, and every tool',
+        'call is a step you pay for too. Work in as few steps as you can, and',
+        'stop when the task is done.',
+        `You have ${formatAmount(agent.network, BigInt(agent.budgetMinor) - BigInt(agent.spentMinor))} left ` +
+          `of ${formatAmount(agent.network, BigInt(agent.budgetMinor))}, and a call costs roughly a fortieth of an hbar.`,
+        /*
+          Told what it may do about running out, because the prompt used to say
+          the budget "cannot be raised" — true before `request_budget` existed
+          and a lie the moment an agent holds the permission. An agent that
+          believes a limit is absolute will not ask, and one that believes it
+          can raise it itself will try.
+        */
+        ...(allows('budget:request')
+          ? [
+              'You cannot raise that limit yourself, but you may ask the person',
+              'who hired you with request_budget. Ask before you run out rather',
+              'than after, say plainly what the rest is for, and expect that they',
+              'may grant less than you asked or nothing at all.',
+            ]
+          : []),
         '',
         'You have a workspace of your own. Files you write there persist between',
         'tasks, and nothing outside it is reachable. When a task produces',
@@ -204,7 +251,13 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
         Bound to this agent, so the workspace is captured when the tools are
         built rather than travelling as an argument the model could set.
       */
-      tools: toolsFor(agent.label, allows),
+      tools: toolsFor({
+        label: agent.label,
+        allows,
+        network: agent.network,
+        remainingMinor: () => BigInt(agent.budgetMinor) - BigInt(agent.spentMinor),
+        askForBudget: (amountMinor, reason) => askForBudget(runtime, agent, amountMinor, reason),
+      }),
     } as never,
   });
 
@@ -351,6 +404,12 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
   {
     unsubscribe();
     running.delete(agent.id);
+    /*
+      Any question this run was waiting on dies with it. A card offering to fund
+      work that stopped is worse than no card: approving it spends real money on
+      a task that will never resume.
+    */
+    abandon(agent.id);
     task.endedAt = Date.now();
     publish(runtime);
     emit({ type: 'status', agentId: agent.id, status: agent.status, ...(task.outcome ? { detail: task.outcome } : {}) });
@@ -380,4 +439,63 @@ const textOf = (content: unknown): string => {
     )
     .map((block) => block.text)
     .join('');
+};
+
+/**
+ * How much to ask for when an agent runs out mid-task.
+ *
+ * Priced from what this task has actually been costing rather than from a
+ * constant, because a constant is wrong on every chain but one and wrong by
+ * orders of magnitude on the others. Ten calls' worth is enough to finish most
+ * things and small enough that granting it is not a decision anyone needs to
+ * think hard about — and the person answering can type a different number
+ * anyway, which is the real control.
+ */
+const topUpFor = (agent: Agent, task: Task): bigint => {
+  const paid = task.steps.map((step) => BigInt(step.costMinor)).filter((cost) => cost > 0n);
+  const last = paid.at(-1);
+  return last === undefined ? defaultMaxAmount(agent.network) : last * 10n;
+};
+
+/**
+ * Puts an agent's request in front of a person, and applies the answer.
+ *
+ * The two halves are separate on purpose. `requests.ask` carries the question
+ * and waits; raising the budget is done here, through the same `update` the
+ * Edit dialog calls — so an approval is not a private path into the authority,
+ * it is the operation a human could have performed by hand, performed on their
+ * instruction.
+ *
+ * The agent is told what happened in words it can act on. "Approved" is not
+ * enough: an agent that does not know how much it got cannot decide whether the
+ * task is still possible, and will find out by running out again.
+ */
+const askForBudget = async (
+  runtime: Runtime,
+  agent: Agent,
+  amountMinor: bigint,
+  reason: string,
+): Promise<string> => {
+  const answer = await ask({
+    agentId: agent.id,
+    network: agent.network,
+    amountMinor,
+    reason,
+  });
+
+  if (!answer.approved) return `Refused: ${answer.why}. Work with what you have, or stop and say why.`;
+
+  const raised = BigInt(agent.budgetMinor) + answer.grantedMinor;
+  try {
+    await update(runtime, agent.id, { budgetMinor: raised });
+  } catch (error) {
+    return `It was approved, but the allowance could not be re-issued: ${(error as Error).message}`;
+  }
+
+  const left = BigInt(agent.budgetMinor) - BigInt(agent.spentMinor);
+  return (
+    `Approved: ${formatAmount(agent.network, answer.grantedMinor)} added. ` +
+    `You now have ${formatAmount(agent.network, left)} left of ` +
+    `${formatAmount(agent.network, BigInt(agent.budgetMinor))}. Carry on.`
+  );
 };

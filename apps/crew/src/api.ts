@@ -54,6 +54,16 @@ export type Agent = {
   tasks: Task[];
 };
 
+/** An agent asking for more budget, waiting for a person. */
+export type BudgetRequest = {
+  id: string;
+  agentId: string;
+  askedMinor: string;
+  asked: string;
+  reason: string;
+  at: number;
+};
+
 /** One permission the runtime enforces, as it describes itself. */
 export type PermissionInfo = { name: string; label: string; detail: string; default: boolean };
 
@@ -69,6 +79,7 @@ export type State = {
   models: string[];
   permissions: PermissionInfo[];
   file: string;
+  requests: BudgetRequest[];
   agents: Agent[];
 };
 
@@ -115,6 +126,17 @@ export const edit = (
     header?: string;
   },
 ) => post(`/api/agents/${id}/edit`, changes);
+/**
+ * Answers a request for more budget.
+ *
+ * The amount is sent rather than implied, because approving is not agreeing —
+ * a person may grant a tenth of what was asked, and the number they typed is
+ * the limit rather than the one the agent proposed.
+ */
+export const approve = (id: string, grantedMinor: string) =>
+  post(`/api/requests/${id}/approve`, { grantedMinor });
+export const decline = (id: string) => post(`/api/requests/${id}/decline`);
+
 export const halt = (id: string) => post(`/api/agents/${id}/stop`);
 export const fire = (id: string) => post(`/api/agents/${id}/fire`);
 
