@@ -30,7 +30,17 @@ import { assign, halt, type Agent, type State, type Step, type Task } from '@/ap
 const Bubble = ({ from, children }: { from: 'you' | 'them'; children: string }) => (
   <div
     className={cn(
-      'max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap',
+      /*
+        `break-words` because `whitespace-pre-wrap` only breaks at whitespace,
+        and the things these agents quote most often have none: a Windows path,
+        a contract address, a data URI. One of those runs straight out of the
+        bubble and off the side of the thread, taking the layout with it.
+
+        `break-words` rather than `break-all`, which would also break ordinary
+        prose mid-word — the rule should apply to the token that cannot fit, not
+        to every line that happens to be long.
+      */
+      'max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed break-words whitespace-pre-wrap',
       from === 'you'
         ? 'self-end rounded-br-sm border border-primary/25 bg-primary/10 text-foreground'
         : 'self-start rounded-bl-sm border bg-card',

@@ -65,7 +65,7 @@ export const BudgetRequestCard = ({ request, agent }: { request: BudgetRequest; 
         the agent meant, in the one place a person is about to commit money on
         the strength of it.
       */}
-      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">“{request.reason}”</p>
+      <p className="mt-1.5 text-xs leading-relaxed break-words text-muted-foreground">“{request.reason}”</p>
 
       <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
         It has spent {agent.spent} of {agent.budget}. Granting adds to its limit; it cannot raise this
