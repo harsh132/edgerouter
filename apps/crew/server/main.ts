@@ -18,13 +18,24 @@
  */
 import { ARC_TESTNET, formatAmount } from '../../../packages/sdk/src/index';
 import { ROOT_NAME } from '../../../packages/ens/src/index';
-import { addProject, agentById, boot, fire, hire, removeProject, update, type Runtime } from './crew';
+import {
+  addProject,
+  agentById,
+  boot,
+  fire,
+  hire,
+  refreshFunding,
+  removeProject,
+  update,
+  type Runtime,
+} from './crew';
 import { runTask, stop, isRunning } from './run';
 import { subscribe } from './events';
 import { MODELS } from './model';
 import { DEFAULT_PERMISSIONS, PERMISSIONS } from './permissions';
 import { FILE_PATH } from './store';
 import { pending, settle } from './requests';
+import { fundingRouteFor } from './funding';
 
 /*
   Declared rather than imported from `@types/bun`.
@@ -82,6 +93,11 @@ const stateOf = (runtime: Runtime) => ({
   */
   funded: runtime.wallet.shortfall === undefined,
   ...(runtime.wallet.shortfall ? { shortfall: runtime.wallet.shortfall } : {}),
+  /*
+    How a person funds this from their own wallet, when the chain has a way.
+    Null is a real answer — see `fundingRouteFor`.
+  */
+  funding: fundingRouteFor(runtime.wallet.network, runtime.wallet.account),
   naming: runtime.naming,
   root: ROOT_NAME,
   models: MODELS,
@@ -152,6 +168,19 @@ console.log(
 );
 console.log(`  names    ${runtime.naming ? `under ${ROOT_NAME}` : 'off — the root name owns no registry here'}`);
 console.log(`\n  open http://127.0.0.1:${PORT}\n`);
+
+/** Whether anything would be cut off by rebuilding the delegation tree. */
+const busy = (): boolean => runtime.crew.agents.some((agent) => isRunning(agent.id));
+
+/*
+  Polled, because a deposit happens in someone else's wallet and nothing tells
+  us about it. Slow on purpose: it is a network call per tick, the answer
+  changes rarely, and the case where somebody is actually waiting has its own
+  endpoint that does not wait for the timer.
+*/
+setInterval(() => {
+  void refreshFunding(runtime, busy).catch(() => undefined);
+}, 20_000);
 
 Bun.serve({
   port: PORT,
@@ -239,6 +268,16 @@ Bun.serve({
       revoking the first has to take every hold on it with it, and that is only
       simple while the path lives in one place.
     */
+    /*
+      Look at the chain now rather than at the next poll. Somebody who has just
+      confirmed a deposit in their wallet is watching this page waiting for it
+      to notice, and twenty seconds of nothing reads as a failure.
+    */
+    if (request.method === 'POST' && path === '/api/funding/refresh') {
+      const changed = await refreshFunding(runtime, busy);
+      return json({ changed, funded: runtime.wallet.shortfall === undefined });
+    }
+
     if (request.method === 'POST' && path === '/api/projects') {
       const body = (await request.json()) as { name?: string; path?: string; mode?: 'read' | 'write' };
       if (!body.path?.trim()) return json({ error: 'which directory?' }, 400);

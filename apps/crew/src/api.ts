@@ -58,6 +58,24 @@ export type Agent = {
   tasks: Task[];
 };
 
+/**
+ * How to put money into this crew from a wallet the user controls.
+ *
+ * Served by the runtime rather than known by the page: every field is a
+ * contract address, and a page carrying its own copy is a page that can be
+ * wrong about where money goes. Null when the chain has no such route.
+ */
+export type FundingRoute = {
+  chainId: number;
+  chainName: string;
+  rpcUrl: string;
+  token: string;
+  tokenSymbol: string;
+  tokenDecimals: number;
+  gatewayWallet: string;
+  depositor: string;
+};
+
 /** A directory on this machine that agents can be given. */
 export type Project = {
   id: string;
@@ -94,6 +112,7 @@ export type State = {
   /** Why not, when it cannot. `empty` needs money; `undeposited` needs one transaction. */
   shortfall?: 'empty' | 'undeposited';
   naming: boolean;
+  funding: FundingRoute | null;
   root: string;
   models: string[];
   permissions: PermissionInfo[];
@@ -169,6 +188,15 @@ export const removeProject = async (id: string): Promise<void> => {
   const response = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
   if (!response.ok) throw new Error('the runtime refused to remove it');
 };
+
+/**
+ * Asks the runtime to look at the chain now.
+ *
+ * The wallet is polled slowly, which is right for a balance that rarely
+ * changes and wrong for the minute after somebody confirms a deposit and sits
+ * watching this page. This is that minute.
+ */
+export const refreshFunding = () => post('/api/funding/refresh');
 
 export const approve = (id: string, grantedMinor: string) =>
   post(`/api/requests/${id}/approve`, { grantedMinor });

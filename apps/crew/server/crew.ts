@@ -214,8 +214,6 @@ export const boot = async (options: { gate: string; network: string }): Promise<
     scope: ALL_PERMISSIONS,
   });
 
-  const server = await serveAuthority(authorityHandler(authority), { port: AUTHORITY_PORT });
-
   /*
     Whether names can be minted at all, asked once rather than assumed. The root
     name owns a registry only if it was deployed with one, and an install
@@ -237,11 +235,23 @@ export const boot = async (options: { gate: string; network: string }): Promise<
     connections: new Map(),
     crew,
     naming,
-    server,
+    server: undefined as unknown as ServedAuthority,
     async stop() {
-      await server.close();
+      await runtime.server.close();
     },
   };
+
+  /*
+    Served through a lambda rather than a handler bound to this authority.
+
+    Money arriving has to be able to rebuild the tree — the root's balance is
+    fixed when the authority is created, so a deposit cannot raise it — and a
+    handler that captured the authority at boot would keep serving the old one
+    after the rebuild, quietly refusing capabilities that were just re-issued.
+  */
+  runtime.server = await serveAuthority((request) => authorityHandler(runtime.authority)(request), {
+    port: AUTHORITY_PORT,
+  });
 
   /*
     Agents from previous runs are reconnected, not re-created. Their names are
@@ -650,6 +660,71 @@ export const fire = async (runtime: Runtime, id: string): Promise<void> => {
 
   agent.status = 'revoked';
   publish(runtime);
+};
+
+/**
+ * Re-reads the wallet, and rebuilds the tree when money has arrived.
+ *
+ * The wallet was a snapshot taken at boot, which made a deposit invisible until
+ * a restart — and the first-run screen promised the opposite, that the page
+ * would notice by itself. It does now.
+ *
+ * Two different jobs, and only the first is cheap. Reading the balance is a
+ * network call and always safe. Making new money *spendable* is not: the root
+ * node's balance is fixed when the authority is created, so the only way to
+ * raise it is to build a new authority — which discards the tree and every
+ * capability issued from it. Agents are re-minted at their remaining balances
+ * afterwards, exactly as they are at boot.
+ *
+ * So a rebuild waits until nothing is running. Replacing the tree under a live
+ * task would revoke the capability it is paying with, and an agent cut off
+ * mid-sentence because somebody topped up the wallet is a worse outcome than a
+ * deposit that takes effect a minute later.
+ */
+export const refreshFunding = async (runtime: Runtime, isBusy: () => boolean): Promise<boolean> => {
+  let wallet: OpenWallet;
+  try {
+    wallet = await openWallet(runtime.wallet.network);
+  } catch {
+    // An RPC that did not answer is not news about anyone's balance.
+    return false;
+  }
+
+  const before = runtime.wallet.spendableMinor;
+  const changed =
+    wallet.spendableMinor !== before ||
+    wallet.shortfall !== runtime.wallet.shortfall ||
+    wallet.heldMinor !== runtime.wallet.heldMinor;
+
+  runtime.wallet = wallet;
+  if (!changed) return false;
+
+  if (wallet.spendableMinor > before && !isBusy()) {
+    emit({ type: 'log', text: `wallet funded: ${formatAmount(wallet.network, wallet.spendableMinor)}` });
+    runtime.authority = await createAuthority({
+      signer: wallet.signer,
+      secret: randomUUID(),
+      fundedMinor: wallet.spendableMinor,
+      names: ensNameGuard({ suffix: '.eth' }),
+      scope: ALL_PERMISSIONS,
+    });
+    runtime.connections.clear();
+
+    for (const agent of runtime.crew.agents) {
+      if (agent.status === 'revoked' || agent.network !== wallet.network) continue;
+      try {
+        await attach(runtime, agent);
+        if (agent.status === 'broke' && BigInt(agent.budgetMinor) > BigInt(agent.spentMinor)) {
+          agent.status = 'idle';
+        }
+      } catch {
+        // Broke, or unattachable. `attach` has already recorded which.
+      }
+    }
+  }
+
+  publish(runtime);
+  return true;
 };
 
 /**

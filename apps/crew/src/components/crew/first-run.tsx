@@ -18,6 +18,7 @@
 import { Copy, ExternalLink } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { ConnectWallet } from './connect-wallet';
 import type { State } from '@/api';
 
 /** Where testnet money comes from, per network. */
@@ -105,6 +106,14 @@ export const FirstRun = ({ state }: { state: State }) => {
             <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
           </a>
         ) : null}
+
+        {/*
+          Offered under the address rather than instead of it. Someone who
+          already has funds elsewhere wants to send them; someone with a wallet
+          in this browser wants the button. Both are real, and picking one for
+          them would be guessing.
+        */}
+        {state.funding ? <ConnectWallet route={state.funding} /> : null}
 
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {undeposited
