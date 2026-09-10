@@ -14,6 +14,7 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { Project } from './projects';
 
 const HOME = join(homedir(), '.edgerouter');
 const FILE = join(HOME, 'crew.json');
@@ -101,6 +102,14 @@ export type Agent = {
    * disagree the capability wins, because it is the half that was signed.
    */
   permissions?: string[];
+  /**
+   * Project ids this agent may reach, and how.
+   *
+   * Ids rather than paths: the path belongs to the project record, so revoking
+   * it there revokes it for everyone at once, and an agent's row never carries
+   * a real directory anywhere it might be logged or published.
+   */
+  grants?: { projectId: string; mode: 'read' | 'write' }[];
   /** Smallest units this agent may ever spend. */
   budgetMinor: string;
   /** Smallest units it has spent. */
@@ -118,9 +127,17 @@ export type Agent = {
 export type Crew = {
   version: 1;
   agents: Agent[];
+  /**
+   * Directories on this machine that agents may be given.
+   *
+   * Held once at crew level rather than copied into each agent, because the
+   * path is the sensitive part and one place to revoke it is worth more than
+   * the convenience of denormalising. An agent holds ids.
+   */
+  projects?: Project[];
 };
 
-const EMPTY: Crew = { version: 1, agents: [] };
+const EMPTY: Crew = { version: 1, agents: [], projects: [] };
 
 /**
  * Reads the crew, forgiving anything that is not there yet.

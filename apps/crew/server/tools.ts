@@ -37,9 +37,20 @@ import { readFile, writeFile, readdir, stat, mkdir, realpath } from 'node:fs/pro
 import { homedir } from 'node:os';
 import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
 import type { Permission } from './permissions';
+import { resolveIn, workspacePathFor, type ProjectMode } from './projects';
 import { formatAmount, parseAmount } from '../../../packages/sdk/src/index';
 
 const WORKSPACES = join(homedir(), '.edgerouter', 'workspaces');
+
+/**
+ * Directories a search never descends into.
+ *
+ * Not security — the deny-list is that — but the difference between a search
+ * that answers and one that walks a hundred thousand files in `node_modules`
+ * while an agent pays for the wait.
+ */
+const SKIP =
+  /^(node_modules|\.git|\.next|dist|build|target|vendor|\.venv|__pycache__|\.cache|AppData|Windows|System32)$/i;
 
 /** How much of a file one read may return. Beyond this it is a budget problem. */
 const MAX_READ = 64 * 1024;
@@ -51,35 +62,15 @@ export const workspaceFor = (label: string): string => {
 };
 
 /**
- * Resolves a path the agent asked for, or refuses.
+ * Where an agent may look, in order.
  *
- * The containment check happens against the *real* path of the nearest
- * existing ancestor, because the file being written may not exist yet — and a
- * check that only works on existing paths would be no check at all for writes,
- * which are the operations that matter.
+ * Its own workspace first, always, because a relative path with no other
+ * context means "in my own room" and that has to keep working exactly as it
+ * did. Granted projects follow, and a project is only in this list if the agent
+ * holds `files:host` — the coarse permission and the specific grant both have
+ * to be present, which is the whole point of splitting them.
  */
-const inside = async (room: string, asked: string): Promise<string> => {
-  if (isAbsolute(asked)) throw new Error('paths are relative to your workspace; absolute paths are not allowed');
-
-  const target = resolve(room, asked);
-
-  /*
-    Walk up to something that exists, resolve *that* through any symlinks, and
-    check the result. Resolving the target directly would fail for a new file;
-    checking the unresolved string would miss a symlinked parent.
-  */
-  let existing = target;
-  while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
-
-  const realRoom = await realpath(room);
-  const realExisting = await realpath(existing);
-  const step = relative(realRoom, realExisting);
-  if (step.startsWith('..') || isAbsolute(step)) {
-    throw new Error('that path is outside your workspace');
-  }
-
-  return target;
-};
+export type Root = { root: string; mode: ProjectMode; name: string };
 
 /** A tool result in the shape pi wants, which is a content array. */
 const said = (text: string) => ({ content: [{ type: 'text' as const, text }] });
@@ -115,6 +106,8 @@ const tool = <T extends TSchema>(
 export type ToolContext = {
   label: string;
   allows: (permission: Permission) => boolean;
+  /** Its workspace, then whatever directories it was granted. */
+  roots: Root[];
   /**
    * Asks a person for more budget and waits for the answer.
    *
@@ -131,11 +124,34 @@ export type ToolContext = {
 export const toolsFor = ({
   label,
   allows,
+  roots,
   askForBudget,
   network,
   remainingMinor,
 }: ToolContext): AgentTool[] => {
   const room = workspaceFor(label);
+
+  const inside = (asked: string, need: ProjectMode) => resolveIn(roots, asked, need);
+
+  /**
+   * What the agent is told it can reach, once, in each tool description.
+   *
+   * Paths are given with forward slashes even on Windows, and that is not
+   * cosmetic: a tool argument is JSON, a Windows path is full of backslashes,
+   * and a model that does not double them produces `C:workspaceedgerouter`.
+   * Observed — an agent given a backslash path reported the file did not exist,
+   * which is exactly what a mangled path looks like from inside `read_file`.
+   * Both forms resolve; only one of them survives being written by a model.
+   */
+  const reach =
+    roots.length > 1
+      ? ' You can also reach these, using absolute paths with forward slashes: ' +
+        roots
+          .slice(1)
+          .map((r) => `${r.name} (${r.mode}) at ${r.root.split('\\').join('/')}`)
+          .join('; ') +
+        '.'
+      : '';
 
   /*
     Refused in words, because the model has to decide what to do instead. It is
@@ -160,15 +176,21 @@ export const toolsFor = ({
       name: 'list_files',
       label: 'List files',
       description:
-        'List files and directories in your workspace. Use "." for the top level. Returns names with sizes.',
+        'List files and directories. Use "." for the top level of your own workspace.' + reach,
       parameters: Type.Object({
-        path: Type.Optional(Type.String({ description: 'Directory relative to your workspace. Defaults to ".".' })),
+        path: Type.Optional(
+          Type.String({
+            description:
+              'Relative to your workspace, or an absolute path inside a folder you have been granted. ' +
+              'Defaults to ".".',
+          }),
+        ),
       }),
       run: async ({ path }) => {
         needs('files:read');
-        const target = await inside(room, path?.trim() || '.');
+        const target = await inside(path?.trim() || '.', 'read');
         const entries = await readdir(target, { withFileTypes: true }).catch(() => null);
-        if (!entries) return 'That directory does not exist.';
+        if (!entries) return `No directory at ${target}.`;
         if (entries.length === 0) return 'Empty.';
 
         const lines = await Promise.all(
@@ -185,15 +207,34 @@ export const toolsFor = ({
     tool({
       name: 'read_file',
       label: 'Read file',
-      description: 'Read a text file from your workspace.',
+      description: 'Read a text file.' + reach,
       parameters: Type.Object({
-        path: Type.String({ description: 'File relative to your workspace.' }),
+        /*
+          The parameter description is the one the model obeys, and it used to
+          say "relative to your workspace" while the tool description offered
+          granted folders. Told to read an absolute path, it stripped the prefix
+          to satisfy the parameter — and the file it then looked for genuinely
+          did not exist. Two descriptions that disagree is one instruction the
+          model has to guess at.
+        */
+        path: Type.String({
+          description:
+            'Relative to your workspace, or an absolute path inside a folder you have been granted. ' +
+            'Keep absolute paths exactly as given; do not shorten them.',
+        }),
       }),
       run: async ({ path }) => {
         needs('files:read');
-        const target = await inside(room, path);
+        const target = await inside(path, 'read');
         const body = await readFile(target, 'utf8').catch(() => null);
-        if (body === null) return 'That file does not exist.';
+        /*
+          Names the path it actually looked at, which is not pedantry: a model
+          writing a Windows path into JSON can lose its backslashes, and
+          `C:workspaceedgerouteroo` reported as "that file does not exist" is
+          indistinguishable from a genuine miss. The resolved path in the
+          message is what let this be diagnosed at all.
+        */
+        if (body === null) return `No file at ${target}.`;
         /*
           Truncated rather than refused. A model that asked for a large file
           usually wants the beginning of it, and every extra token here is paid
@@ -212,14 +253,18 @@ export const toolsFor = ({
       name: 'write_file',
       label: 'Write file',
       description:
-        'Write a text file in your workspace, creating directories as needed. Replaces the file if it exists.',
+        'Write a text file, creating directories as needed. Replaces the file if it exists.' + reach,
       parameters: Type.Object({
-        path: Type.String({ description: 'File relative to your workspace.' }),
+        path: Type.String({
+          description:
+            'Relative to your workspace, or an absolute path inside a folder you have been granted for writing. ' +
+            'Keep absolute paths exactly as given.',
+        }),
         content: Type.String({ description: 'The full contents to write.' }),
       }),
       run: async ({ path, content }) => {
         needs('files:write');
-        const target = await inside(room, path);
+        const target = await inside(path, 'write');
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, content, 'utf8');
         return `Wrote ${content.length} characters to ${path}.`;
@@ -232,7 +277,9 @@ export const toolsFor = ({
     tool({
       name: 'search_files',
       label: 'Search files',
-      description: 'Find which files in your workspace contain a piece of text. Returns matching lines.',
+      description:
+        'Find which files contain a piece of text. Searches your workspace and anything you have been ' +
+        'granted; on a large directory this is slow and returns only the first matches.' + reach,
       parameters: Type.Object({
         query: Type.String({ description: 'Text to look for. Case-insensitive.' }),
       }),
@@ -242,23 +289,46 @@ export const toolsFor = ({
         const hits: string[] = [];
 
         const walk = async (directory: string): Promise<void> => {
-          for (const entry of await readdir(directory, { withFileTypes: true })) {
+          if (hits.length >= 40) return;
+          /*
+            A grant can be a whole drive, so this has to survive directories it
+            cannot open and stop early rather than enumerate a machine. Neither
+            is an error worth reporting to the model: it asked what matched, not
+            which folders the operating system guards.
+          */
+          const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+          for (const entry of entries) {
+            if (hits.length >= 40) return;
+            if (SKIP.test(entry.name)) continue;
             const path = join(directory, entry.name);
             if (entry.isDirectory()) {
               await walk(path);
               continue;
             }
+            /*
+              Checked per file rather than trusted from the walk, so a search can
+              never surface a line from a file `read_file` would refuse.
+            */
+            if ((await inside(path, 'read').catch(() => null)) === null) continue;
             const body = await readFile(path, 'utf8').catch(() => null);
             if (body === null) continue; // Binary, or unreadable. Not an error worth reporting.
             body.split('\n').forEach((line, index) => {
               if (hits.length < 40 && line.toLowerCase().includes(needle)) {
-                hits.push(`${relative(room, path)}:${index + 1}: ${line.trim().slice(0, 200)}`);
+                hits.push(`${relative(room, path) || path}:${index + 1}: ${line.trim().slice(0, 200)}`);
               }
             });
           }
         };
 
-        await walk(room);
+        /*
+          Every root, not just the workspace. A grant the agent cannot search is
+          one it has to be told the shape of first, which defeats the point of
+          giving it a repository.
+        */
+        for (const { root } of roots) {
+          if (hits.length >= 40) break;
+          await walk(root);
+        }
         return hits.length > 0 ? hits.join('\n') : 'Nothing matched.';
       },
     }),

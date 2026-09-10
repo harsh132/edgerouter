@@ -39,6 +39,12 @@ export const PERMISSIONS = {
     label: 'Write its own files',
     detail: 'Create and replace files in its own workspace. Work that outlives one task.',
   },
+  'files:host': {
+    label: 'Reach files on this machine',
+    detail:
+      'Open directories you have granted it, outside its own workspace. Which directories is private to ' +
+      'this machine; the chain only records that it may reach some.',
+  },
   'delegate': {
     label: 'Fund other agents',
     detail: 'Hand part of its own budget to another agent. It can never hand over more than it holds.',

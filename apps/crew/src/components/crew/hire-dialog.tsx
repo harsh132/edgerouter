@@ -30,10 +30,11 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { PermissionFields } from './permission-fields';
+import { GrantFields } from './project-fields';
 import { ProfileFields, ProfilePreview } from './profile-fields';
 import { aliasOf, toMinor } from '@/lib/format';
 import { sigilDataUri } from '@/lib/sigil';
-import { hire, type State } from '@/api';
+import { hire, type Grant, type State } from '@/api';
 
 const Field = ({
   label,
@@ -77,6 +78,7 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
   const [permissions, setPermissions] = useState<string[]>(
     state.permissions.filter((permission) => permission.default).map((permission) => permission.name),
   );
+  const [grants, setGrants] = useState<Grant[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -126,6 +128,7 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
           page makes the picture, and the only process holding a key writes it.
         */
         permissions,
+        grants,
         avatar: avatar.trim() || sigilDataUri(alias || 'agent'),
         ...(header.trim() ? { header: header.trim() } : {}),
       });
@@ -134,6 +137,7 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
       setAliasOwned(false);
       setBrief('');
       setBudget('');
+      setGrants([]);
       setAvatar('');
       setHeader('');
       onClose();
@@ -240,6 +244,13 @@ export const HireDialog = ({ state, open, onClose }: { state: State; open: boole
           </Field>
 
           <PermissionFields available={state.permissions} granted={permissions} onChange={setPermissions} />
+
+          <GrantFields
+            projects={state.projects}
+            grants={grants}
+            onChange={setGrants}
+            enabled={permissions.includes('files:host')}
+          />
 
           <ProfileFields avatar={avatar} header={header} onAvatar={setAvatar} onHeader={setHeader} />
 

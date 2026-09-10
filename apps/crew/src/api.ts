@@ -43,6 +43,8 @@ export type Agent = {
   spent: string;
   /** What it may do, beyond spend. Always sent, defaults resolved by the runtime. */
   permissions: string[];
+  /** Directories it may reach. Empty unless it also holds files:host. */
+  grants: Grant[];
   /** Its picture and banner. Also written to ENS, where others can see them. */
   avatar?: string;
   header?: string;
@@ -53,6 +55,17 @@ export type Agent = {
   running: boolean;
   tasks: Task[];
 };
+
+/** A directory on this machine that agents can be given. */
+export type Project = {
+  id: string;
+  name: string;
+  path: string;
+  mode: 'read' | 'write';
+  createdAt: number;
+};
+
+export type Grant = { projectId: string; mode: 'read' | 'write' };
 
 /** An agent asking for more budget, waiting for a person. */
 export type BudgetRequest = {
@@ -80,6 +93,7 @@ export type State = {
   permissions: PermissionInfo[];
   file: string;
   requests: BudgetRequest[];
+  projects: Project[];
   agents: Agent[];
 };
 
@@ -98,6 +112,7 @@ export const hire = (agent: {
   label: string;
   title?: string;
   permissions?: string[];
+  grants?: Grant[];
   brief: string;
   budgetMinor: string;
   model: string;
@@ -119,6 +134,7 @@ export const edit = (
   changes: {
     title?: string;
     permissions?: string[];
+    grants?: Grant[];
     brief?: string;
     model?: string;
     budgetMinor?: string;
@@ -133,6 +149,21 @@ export const edit = (
  * a person may grant a tenth of what was asked, and the number they typed is
  * the limit rather than the one the agent proposed.
  */
+/**
+ * Grants a directory to the crew.
+ *
+ * The path is typed rather than picked, because a browser file picker hands
+ * back a file, not the directory path the runtime needs — and a path the user
+ * wrote is one they can see before they commit to it.
+ */
+export const addProject = (project: { name: string; path: string; mode: 'read' | 'write' }) =>
+  post('/api/projects', project);
+
+export const removeProject = async (id: string): Promise<void> => {
+  const response = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+  if (!response.ok) throw new Error('the runtime refused to remove it');
+};
+
 export const approve = (id: string, grantedMinor: string) =>
   post(`/api/requests/${id}/approve`, { grantedMinor });
 export const decline = (id: string) => post(`/api/requests/${id}/decline`);

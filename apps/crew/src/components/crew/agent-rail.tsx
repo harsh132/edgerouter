@@ -1,7 +1,7 @@
 /**
  * The rail: everyone you have hired, and the wallet they all spend from.
  */
-import { Plus } from 'lucide-react';
+import { FolderOpen, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
@@ -14,12 +14,14 @@ export const AgentRail = ({
   selected,
   onSelect,
   onHire,
+  onFolders,
   note,
 }: {
   state: State;
   selected: string | null;
   onSelect: (id: string) => void;
   onHire: () => void;
+  onFolders: () => void;
   /** The chain's last word — minting, clearing. The only place it is visible. */
   note?: string;
 }) => (
@@ -35,6 +37,15 @@ export const AgentRail = ({
   <aside className="flex min-h-0 flex-col border-r bg-card text-card-foreground">
     <header className="flex items-center gap-2 px-4 py-3">
       <h1 className="flex-1 text-sm font-semibold tracking-tight">Crew</h1>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-7"
+        onClick={onFolders}
+        title="Folders agents may reach"
+      >
+        <FolderOpen />
+      </Button>
       <Button variant="ghost" size="icon" className="size-7" onClick={onHire} title="Hire an agent">
         <Plus />
       </Button>

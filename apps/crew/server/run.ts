@@ -25,7 +25,7 @@ import { defaultMaxAmount, formatAmount } from '../../../packages/sdk/src/index'
 import { allows as permitted } from '../../../packages/core/src/caveat';
 import { modelFor } from './model';
 import { payingFetch, BudgetExhausted } from './paying-fetch';
-import { connectionFor, publish, update, type Runtime } from './crew';
+import { connectionFor, publish, rootsFor, update, type Runtime } from './crew';
 import { ask, abandon } from './requests';
 import { toolsFor } from './tools';
 import { ALL_PERMISSIONS, type Permission } from './permissions';
@@ -254,6 +254,7 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
       tools: toolsFor({
         label: agent.label,
         allows,
+        roots: rootsFor(runtime, agent),
         network: agent.network,
         remainingMinor: () => BigInt(agent.budgetMinor) - BigInt(agent.spentMinor),
         askForBudget: (amountMinor, reason) => askForBudget(runtime, agent, amountMinor, reason),

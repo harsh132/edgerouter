@@ -30,10 +30,11 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { PermissionFields } from './permission-fields';
+import { GrantFields } from './project-fields';
 import { ProfileFields, ProfilePreview } from './profile-fields';
 import { money, nameOf, toMinor } from '@/lib/format';
 import { sigilDataUri } from '@/lib/sigil';
-import { edit, type Agent, type State } from '@/api';
+import { edit, type Agent, type Grant, type State } from '@/api';
 
 export const EditDialog = ({
   agent,
@@ -61,6 +62,7 @@ export const EditDialog = ({
   const [permissions, setPermissions] = useState<string[]>(agent.permissions);
   const [avatar, setAvatar] = useState(agent.avatar ?? '');
   const [header, setHeader] = useState(agent.header ?? '');
+  const [grants, setGrants] = useState<Grant[]>(agent.grants);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -99,6 +101,7 @@ export const EditDialog = ({
 
     const changes = {
       ...(permissionsChanged ? { permissions } : {}),
+      ...(JSON.stringify(grants) !== JSON.stringify(agent.grants) ? { grants } : {}),
       ...(title.trim() !== (agent.title ?? '') ? { title: title.trim() } : {}),
       ...(brief !== agent.brief ? { brief } : {}),
       ...(model !== agent.model ? { model } : {}),
@@ -201,6 +204,13 @@ export const EditDialog = ({
           </div>
 
           <PermissionFields available={state.permissions} granted={permissions} onChange={setPermissions} />
+
+          <GrantFields
+            projects={state.projects}
+            grants={grants}
+            onChange={setGrants}
+            enabled={permissions.includes('files:host')}
+          />
 
           <ProfileFields avatar={avatar} header={header} onAvatar={setAvatar} onHeader={setHeader} />
 

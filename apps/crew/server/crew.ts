@@ -43,6 +43,14 @@ import {
 } from '../../../packages/ens/src/index';
 import { load, save, type Agent, type Crew } from './store';
 import { ALL_PERMISSIONS, DEFAULT_PERMISSIONS, knownOnly } from './permissions';
+import {
+  describeGrant,
+  newProjectId,
+  workspacePathFor,
+  type Project,
+  type ProjectMode,
+} from './projects';
+import type { Root } from './tools';
 import { emit } from './events';
 import { openWallet, type OpenWallet } from './wallet';
 
@@ -104,6 +112,23 @@ const attach = async (runtime: Runtime, agent: Agent): Promise<Connection> => {
     roster losing its tools because a public endpoint was slow.
   */
   const asked = knownOnly(agent.permissions ?? DEFAULT_PERMISSIONS);
+
+  /*
+    Directory grants ride in the capability as opaque ids, never as paths.
+
+    `project:prj_7f3a:write` says nothing about the machine to anything holding
+    it, and the id means nothing without the runtime's own record — which is the
+    point. They are appended after the coarse permissions are intersected,
+    because they are not coarse permissions: what reaches the chain is
+    `files:host` alone, and it never says which directory.
+
+    A grant whose project no longer exists is dropped rather than carried. A
+    capability naming a project nobody can resolve is a permission that reads as
+    real and is not.
+  */
+  const grants = (agent.grants ?? [])
+    .filter((grant) => runtime.crew.projects?.some((project) => project.id === grant.projectId))
+    .map((grant) => `project:${grant.projectId}:${grant.mode}`);
   const published = agent.name ? await permissionsOf(createEnsClient(), agent.name) : null;
   const scope = published === null ? asked : asked.filter((permission) => published.includes(permission));
 
@@ -137,7 +162,7 @@ const attach = async (runtime: Runtime, agent: Agent): Promise<Connection> => {
       permission nothing in this build can check is a token that reads as more
       powerful than it is.
     */
-    scope,
+    scope: [...scope, ...(scope.includes('files:host') ? grants : [])],
   });
 
   const connection = await connectAuthority({
@@ -256,6 +281,8 @@ export const hire = async (
     header?: string;
     /** What it may do. Omitted means the default set. */
     permissions?: string[];
+    /** Directories it may reach, by project id. Needs `files:host` to matter. */
+    grants?: { projectId: string; mode: ProjectMode }[];
   },
 ): Promise<Agent> => {
   const label = params.label
@@ -299,6 +326,7 @@ export const hire = async (
     status: 'idle',
     tasks: [],
     permissions: knownOnly(params.permissions ?? DEFAULT_PERMISSIONS),
+    ...(params.grants?.length ? { grants: params.grants } : {}),
     ...(params.title?.trim() ? { title: params.title.trim() } : {}),
     ...(params.avatar ? { avatar: params.avatar } : {}),
     ...(params.header ? { header: params.header } : {}),
@@ -392,6 +420,7 @@ export const update = async (
     avatar?: string;
     header?: string;
     permissions?: string[];
+    grants?: { projectId: string; mode: ProjectMode }[];
   },
 ): Promise<Agent> => {
   const agent = agentById(runtime, id);
@@ -493,6 +522,31 @@ export const update = async (
     }
   }
 
+  /*
+    Directory grants, applied before the capability is re-minted below for the
+    same reason permissions are: the token carries them, so changing the record
+    without re-issuing would leave an agent whose file and whose capability
+    disagree about what it can open.
+  */
+  if (changes.grants !== undefined) {
+    const known = changes.grants.filter((grant) =>
+      runtime.crew.projects?.some((project) => project.id === grant.projectId),
+    );
+    const before = JSON.stringify(agent.grants ?? []);
+    agent.grants = known;
+
+    // A revoked agent never reaches here — `update` refuses one at the top.
+    if (JSON.stringify(known) !== before && BigInt(agent.budgetMinor) > BigInt(agent.spentMinor)) {
+      runtime.connections.delete(agent.id);
+      try {
+        runtime.authority.revoke({ token: runtime.authority.rootToken, node: agent.name ?? agent.label });
+      } catch {
+        // Not in the tree; nothing to withdraw.
+      }
+      await attach(runtime, agent);
+    }
+  }
+
   if (changes.title !== undefined) agent.title = changes.title.trim();
   if (changes.brief !== undefined) agent.brief = changes.brief;
   if (changes.model !== undefined) agent.model = changes.model;
@@ -568,6 +622,87 @@ export const fire = async (runtime: Runtime, id: string): Promise<void> => {
 
   agent.status = 'revoked';
   publish(runtime);
+};
+
+/**
+ * Adds a directory to the crew's projects.
+ *
+ * Granting a path and granting it *to an agent* are separate acts, and keeping
+ * them separate is what makes the second one cheap to undo. A project can exist
+ * with nobody holding it.
+ */
+export const addProject = (
+  runtime: Runtime,
+  params: { name: string; path: string; mode: ProjectMode },
+): Project => {
+  const { path, warning } = describeGrant(params.path);
+
+  const existing = runtime.crew.projects?.find(
+    (project) => project.path.toLowerCase() === path.toLowerCase(),
+  );
+  if (existing) throw new Error(`${path} is already granted, as “${existing.name}”`);
+
+  const project: Project = {
+    id: newProjectId(),
+    name: params.name.trim() || path,
+    path,
+    mode: params.mode,
+    createdAt: Date.now(),
+  };
+
+  runtime.crew.projects = [...(runtime.crew.projects ?? []), project];
+  if (warning) emit({ type: 'log', text: `${project.name}: ${warning}` });
+  publish(runtime);
+  return project;
+};
+
+/**
+ * Removes a directory, and every agent's hold on it.
+ *
+ * Agents holding it are re-attached so their capabilities stop naming it. A
+ * capability outliving the project it points at would be a grant enforced only
+ * by the runtime forgetting to look — which is not enforcement.
+ */
+export const removeProject = async (runtime: Runtime, id: string): Promise<void> => {
+  runtime.crew.projects = (runtime.crew.projects ?? []).filter((project) => project.id !== id);
+
+  for (const agent of runtime.crew.agents) {
+    if (!agent.grants?.some((grant) => grant.projectId === id)) continue;
+    agent.grants = agent.grants.filter((grant) => grant.projectId !== id);
+    if (BigInt(agent.budgetMinor) <= BigInt(agent.spentMinor)) continue;
+    runtime.connections.delete(agent.id);
+    try {
+      runtime.authority.revoke({ token: runtime.authority.rootToken, node: agent.name ?? agent.label });
+    } catch {
+      // Not in the tree; nothing to withdraw before re-minting.
+    }
+    await attach(runtime, agent).catch(() => undefined);
+  }
+
+  publish(runtime);
+};
+
+/** What an agent may actually reach, resolved from ids to real paths. */
+export const rootsFor = (runtime: Runtime, agent: Agent): Root[] => {
+  const own = { root: workspacePathFor(agent.label), mode: 'write' as ProjectMode, name: 'your workspace' };
+  const permitted = knownOnly(agent.permissions ?? DEFAULT_PERMISSIONS).includes('files:host');
+  if (!permitted) return [own];
+
+  const projects = runtime.crew.projects ?? [];
+  return [
+    own,
+    ...(agent.grants ?? []).flatMap((grant) => {
+      const project = projects.find((candidate) => candidate.id === grant.projectId);
+      if (!project) return [];
+      /*
+        The narrower of the two. A project granted read-only cannot be handed to
+        an agent as writable by editing the agent's row — the same `min` that
+        governs every other narrowing here.
+      */
+      const mode: ProjectMode = project.mode === 'read' || grant.mode === 'read' ? 'read' : 'write';
+      return [{ root: project.path, mode, name: project.name }];
+    }),
+  ];
 };
 
 export const agentById = (runtime: Runtime, id: string): Agent => {

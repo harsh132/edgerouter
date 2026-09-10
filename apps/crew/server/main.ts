@@ -18,7 +18,7 @@
  */
 import { formatAmount } from '../../../packages/sdk/src/index';
 import { ROOT_NAME } from '../../../packages/ens/src/index';
-import { boot, hire, fire, update, agentById, type Runtime } from './crew';
+import { addProject, agentById, boot, fire, hire, removeProject, update, type Runtime } from './crew';
 import { runTask, stop, isRunning } from './run';
 import { subscribe } from './events';
 import { MODELS } from './model';
@@ -86,9 +86,16 @@ const stateOf = (runtime: Runtime) => ({
     the thing that was waiting is gone.
   */
   requests: pending(),
+  /*
+    Real paths, and only to the page on loopback. They never reach a capability,
+    a log, or the chain — an agent's token carries the opaque id, and the chain
+    carries only that it may reach some directory at all.
+  */
+  projects: runtime.crew.projects ?? [],
   agents: runtime.crew.agents.map((agent) => ({
     ...agent,
     running: isRunning(agent.id),
+    grants: agent.grants ?? [],
     /*
       Always populated, even for an agent stored before permissions existed.
       The page would otherwise have to know what the default is to render it,
@@ -171,6 +178,7 @@ Bun.serve({
         avatar?: string;
         header?: string;
         permissions?: string[];
+        grants?: { projectId: string; mode: 'read' | 'write' }[];
       };
       try {
         const agent = await hire(runtime, {
@@ -178,6 +186,7 @@ Bun.serve({
           brief: body.brief,
           ...(body.title ? { title: body.title } : {}),
           ...(body.permissions ? { permissions: body.permissions } : {}),
+          ...(body.grants ? { grants: body.grants } : {}),
           budgetMinor: BigInt(body.budgetMinor),
           model: body.model,
           ...(body.avatar ? { avatar: body.avatar } : {}),
@@ -196,6 +205,32 @@ Bun.serve({
       amount somebody typed is a limit they set rather than one they waved
       through.
     */
+    /*
+      Granting a directory. Separate from granting it to an agent, because
+      revoking the first has to take every hold on it with it, and that is only
+      simple while the path lives in one place.
+    */
+    if (request.method === 'POST' && path === '/api/projects') {
+      const body = (await request.json()) as { name?: string; path?: string; mode?: 'read' | 'write' };
+      if (!body.path?.trim()) return json({ error: 'which directory?' }, 400);
+      try {
+        const project = addProject(runtime, {
+          name: body.name ?? '',
+          path: body.path,
+          mode: body.mode === 'write' ? 'write' : 'read',
+        });
+        return json({ project });
+      } catch (error) {
+        return json({ error: (error as Error).message }, 400);
+      }
+    }
+
+    const removing = /^\/api\/projects\/([^/]+)$/.exec(path);
+    if (request.method === 'DELETE' && removing) {
+      await removeProject(runtime, removing[1]!);
+      return json({ removed: true });
+    }
+
     const answering = /^\/api\/requests\/([^/]+)\/(approve|decline)$/.exec(path);
     if (request.method === 'POST' && answering) {
       const [, id, verdict] = answering as unknown as [string, string, string];
@@ -232,6 +267,7 @@ Bun.serve({
             avatar?: string;
             header?: string;
             permissions?: string[];
+            grants?: { projectId: string; mode: 'read' | 'write' }[];
           };
           await update(runtime, id, {
             ...(changes.title === undefined ? {} : { title: changes.title }),
@@ -241,6 +277,7 @@ Bun.serve({
             ...(changes.avatar === undefined ? {} : { avatar: changes.avatar }),
             ...(changes.header === undefined ? {} : { header: changes.header }),
             ...(changes.permissions === undefined ? {} : { permissions: changes.permissions }),
+            ...(changes.grants === undefined ? {} : { grants: changes.grants }),
           });
           return json({ updated: true });
         }

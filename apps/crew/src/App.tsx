@@ -16,6 +16,14 @@ import { AgentDetail } from '@/components/crew/agent-detail';
 import { AgentRail } from '@/components/crew/agent-rail';
 import { AgentThread } from '@/components/crew/agent-thread';
 import { HireDialog } from '@/components/crew/hire-dialog';
+import { ProjectManager } from '@/components/crew/project-fields';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useCrew } from './api';
 
 const Waiting = ({ connected }: { connected: boolean }) => (
@@ -51,6 +59,7 @@ export const App = () => {
   const { state, connected, log } = useCrew();
   const [selected, setSelected] = useState<string | null>(null);
   const [hiring, setHiring] = useState(false);
+  const [folders, setFolders] = useState(false);
 
   const agent = state?.agents.find((candidate) => candidate.id === selected) ?? null;
 
@@ -73,6 +82,7 @@ export const App = () => {
         selected={selected}
         onSelect={setSelected}
         onHire={() => setHiring(true)}
+        onFolders={() => setFolders(true)}
         {...(log.at(-1) ? { note: log.at(-1)! } : {})}
       />
 
@@ -81,6 +91,19 @@ export const App = () => {
       {agent ? <AgentDetail agent={agent} state={state} /> : <aside className="border-l bg-card" />}
 
       <HireDialog state={state} open={hiring} onClose={() => setHiring(false)} />
+
+      <Dialog open={folders} onOpenChange={(next) => !next && setFolders(false)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Folders</DialogTitle>
+            <DialogDescription>
+              Directories on this machine that agents can be given. Paths stay here — an agent's capability
+              carries an opaque id, and the chain records only that it may reach files at all.
+            </DialogDescription>
+          </DialogHeader>
+          <ProjectManager projects={state.projects} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
