@@ -192,6 +192,12 @@ export const boot = async (options: { gate: string; network: string }): Promise<
   const authority = await createAuthority({
     signer: wallet.signer,
     secret: randomUUID(),
+    /*
+      Zero for a wallet that cannot pay yet, rather than a refusal to start.
+      An authority funded with nothing hands out nothing, which is the correct
+      behaviour for a crew with no money — and it lets the app come up and say
+      so instead of exiting before it serves a page.
+    */
     fundedMinor: wallet.spendableMinor,
     /*
       Checked before every signature, which is what lets a name revoked on

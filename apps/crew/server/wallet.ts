@@ -21,6 +21,16 @@ import {
   type PaymentSigner,
 } from '../../../packages/sdk/src/index';
 
+/**
+ * Why a wallet cannot pay yet, in the terms the fix differs by.
+ *
+ * `empty` needs money from somewhere — a faucet on a testnet, a transfer on a
+ * mainnet. `undeposited` already has the money and needs one transaction to
+ * make it spendable. They look identical in a balance and have nothing in
+ * common as instructions, which is the whole reason this is not a boolean.
+ */
+export type Shortfall = 'empty' | 'undeposited';
+
 export type OpenWallet = {
   signer: PaymentSigner;
   /** The address or account id money leaves from. Public, and shown. */
@@ -30,14 +40,36 @@ export type OpenWallet = {
   network: string;
   /** Present only when it differs from spendable, and only then worth saying. */
   heldMinor?: bigint;
+  /**
+   * Absent when the wallet can pay.
+   *
+   * An unfunded wallet used to throw here, which meant the runtime exited
+   * before it served anything — so the first thing a new user saw was a process
+   * that would not start, with the address they needed to fund printed in a
+   * terminal they were not looking at. A wallet that cannot pay is a state the
+   * app has to be able to render, not an error that prevents rendering.
+   */
+  shortfall?: Shortfall;
 };
 
 export const openWallet = async (network: string): Promise<OpenWallet> => {
   if (network.startsWith('hedera:')) {
     const { wallet } = loadOrCreateWallet({ network });
     const funding = await wallet.refresh();
+    /*
+      An unfunded Hedera wallet has no account id, because an account does not
+      exist until something is sent to the address. So the address is what the
+      user is shown and what they fund; the id appears afterwards, which is
+      itself the confirmation that it worked.
+    */
     if (!funding.funded) {
-      throw new Error(`the wallet holds no hbar yet — send some to ${wallet.evmAddress}`);
+      return {
+        signer: wallet.signer(),
+        account: wallet.evmAddress,
+        spendableMinor: 0n,
+        network,
+        shortfall: 'empty',
+      };
     }
     return {
       signer: wallet.signer(),
@@ -57,13 +89,16 @@ export const openWallet = async (network: string): Promise<OpenWallet> => {
       /*
         Named precisely, because the two failures look identical from the UI
         and have different fixes. An address with USDC and nothing deposited is
-        one transaction away from working; an empty one needs a faucet.
+        one transaction away from working; an empty one needs funding.
       */
-      throw new Error(
-        funding.walletMinor > 0n
-          ? `this wallet holds USDC but has deposited none of it into the Gateway, which is what payment is drawn from`
-          : `this wallet holds no USDC yet — send some to ${wallet.address}`,
-      );
+      return {
+        signer,
+        account: wallet.address,
+        spendableMinor: 0n,
+        heldMinor: funding.walletMinor,
+        network,
+        shortfall: funding.walletMinor > 0n ? 'undeposited' : 'empty',
+      };
     }
     return {
       signer,
@@ -75,8 +110,11 @@ export const openWallet = async (network: string): Promise<OpenWallet> => {
   }
 
   const funding = await wallet.refresh();
-  if (!funding.canPay) {
-    throw new Error(`this wallet holds no USDC yet — send some to ${wallet.address}`);
-  }
-  return { signer, account: wallet.address, spendableMinor: funding.tokenMinor, network };
+  return {
+    signer,
+    account: wallet.address,
+    spendableMinor: funding.canPay ? funding.tokenMinor : 0n,
+    network,
+    ...(funding.canPay ? {} : { shortfall: 'empty' as const }),
+  };
 };

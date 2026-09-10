@@ -66,6 +66,13 @@ const stateOf = (runtime: Runtime) => ({
   ...(runtime.wallet.heldMinor === undefined
     ? {}
     : { held: formatAmount(runtime.wallet.network, runtime.wallet.heldMinor) }),
+  /*
+    What the user has to do before anything can be bought, if anything. The
+    page needs the distinction: money missing and money undeposited are one
+    transaction apart and share no instructions.
+  */
+  funded: runtime.wallet.shortfall === undefined,
+  ...(runtime.wallet.shortfall ? { shortfall: runtime.wallet.shortfall } : {}),
   naming: runtime.naming,
   root: ROOT_NAME,
   models: MODELS,
@@ -120,7 +127,13 @@ try {
 }
 
 console.log(`  wallet   ${runtime.wallet.account}`);
-console.log(`  can spend ${formatAmount(runtime.wallet.network, runtime.wallet.spendableMinor)}`);
+console.log(
+  runtime.wallet.shortfall === undefined
+    ? `  can spend ${formatAmount(runtime.wallet.network, runtime.wallet.spendableMinor)}`
+    : runtime.wallet.shortfall === 'undeposited'
+      ? `  holds ${formatAmount(runtime.wallet.network, runtime.wallet.heldMinor ?? 0n)}, none of it deposited yet`
+      : '  not funded yet — the app will say what to do',
+);
 console.log(`  names    ${runtime.naming ? `under ${ROOT_NAME}` : 'off — the root name owns no registry here'}`);
 console.log(`\n  open http://127.0.0.1:${PORT}\n`);
 

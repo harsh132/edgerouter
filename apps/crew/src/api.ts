@@ -87,6 +87,10 @@ export type State = {
   spendable: string;
   spendableMinor: string;
   held?: string;
+  /** False until the wallet can actually pay for something. */
+  funded: boolean;
+  /** Why not, when it cannot. `empty` needs money; `undeposited` needs one transaction. */
+  shortfall?: 'empty' | 'undeposited';
   naming: boolean;
   root: string;
   models: string[];

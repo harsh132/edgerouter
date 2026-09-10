@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { AgentDetail } from '@/components/crew/agent-detail';
 import { AgentRail } from '@/components/crew/agent-rail';
 import { AgentThread } from '@/components/crew/agent-thread';
+import { FirstRun } from '@/components/crew/first-run';
 import { HireDialog } from '@/components/crew/hire-dialog';
 import { ProjectManager } from '@/components/crew/project-fields';
 import {
@@ -86,7 +87,18 @@ export const App = () => {
         {...(log.at(-1) ? { note: log.at(-1)! } : {})}
       />
 
-      {agent ? <AgentThread agent={agent} state={state} /> : <NoAgents root={state.root} onHire={() => setHiring(true)} />}
+      {/*
+        Funding comes before everything, because nothing else can happen without
+        it — an agent cannot be hired against a wallet with no money, and
+        offering the button would be offering a failure.
+      */}
+      {!state.funded ? (
+        <FirstRun state={state} />
+      ) : agent ? (
+        <AgentThread agent={agent} state={state} />
+      ) : (
+        <NoAgents root={state.root} onHire={() => setHiring(true)} />
+      )}
 
       {agent ? <AgentDetail agent={agent} state={state} /> : <aside className="border-l bg-card" />}
 
