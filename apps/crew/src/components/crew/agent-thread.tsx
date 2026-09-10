@@ -17,12 +17,22 @@ import { nameOf, when } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { assign, halt, type Agent, type State, type Step, type Task } from '@/api';
 
+/**
+ * One message.
+ *
+ * Yours is tinted with the accent rather than filled with it. The accent is a
+ * signal colour — bright enough to carry dark text on a button — and a column
+ * of them at paragraph size stops being a signal and becomes the loudest thing
+ * on a screen whose actual subject is money being spent. Ender uses it on
+ * controls and leaves surfaces to glass, and this follows that: a wash, a
+ * hairline, and ordinary text.
+ */
 const Bubble = ({ from, children }: { from: 'you' | 'them'; children: string }) => (
   <div
     className={cn(
       'max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap',
       from === 'you'
-        ? 'self-end rounded-br-sm bg-primary text-primary-foreground'
+        ? 'self-end rounded-br-sm border border-primary/25 bg-primary/10 text-foreground'
         : 'self-start rounded-bl-sm border bg-card',
     )}
   >
