@@ -252,6 +252,19 @@ export const boot = async (options: { gate: string; network: string }): Promise<
   */
   for (const agent of crew.agents) {
     if (agent.status === 'revoked') continue;
+    /*
+      An agent belongs to the network it was hired on, and switching networks
+      must not quietly re-price it.
+
+      A budget is a bigint of the smallest unit, and the smallest unit is not
+      the same size twice: `15000000` is 0.15 hbar and also 15 USDC. Attaching a
+      Hedera agent against an Arc wallet would either commit fifteen dollars to
+      something funded with eight cents, or fail with a message about budgets
+      that says nothing about the actual problem. So it is skipped, and left
+      exactly as it was — its name, its spend and its history are all still
+      true, they are simply true about another chain.
+    */
+    if (agent.network !== wallet.network) continue;
     try {
       await attach(runtime, agent);
       if (agent.status !== 'broke') agent.status = 'idle';
@@ -310,8 +323,14 @@ export const hire = async (
     and one of them failing mid-task for reasons the user cannot see. Refused
     here, while it is still a form with a number in it.
   */
+  /*
+    Only agents on this network, for the same reason `boot` skips the others: a
+    budget is a bigint of the smallest unit, and `15000000` is 0.15 hbar and
+    also 15 USDC. Summing across chains would price a Hedera crew in dollars and
+    refuse every hire against a wallet that has plenty.
+  */
   const promised = runtime.crew.agents
-    .filter((existing) => existing.status !== 'revoked')
+    .filter((existing) => existing.status !== 'revoked' && existing.network === runtime.wallet.network)
     .reduce((total, existing) => total + (BigInt(existing.budgetMinor) - BigInt(existing.spentMinor)), 0n);
   if (promised + params.budgetMinor > runtime.wallet.spendableMinor) {
     throw new Error(
@@ -441,7 +460,10 @@ export const update = async (
     }
 
     const promised = runtime.crew.agents
-      .filter((other) => other.id !== agent.id && other.status !== 'revoked')
+      .filter(
+        (other) =>
+          other.id !== agent.id && other.status !== 'revoked' && other.network === runtime.wallet.network,
+      )
       .reduce((total, other) => total + (BigInt(other.budgetMinor) - BigInt(other.spentMinor)), 0n);
     if (promised + (changes.budgetMinor - spent) > runtime.wallet.spendableMinor) {
       throw new Error(

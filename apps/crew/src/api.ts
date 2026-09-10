@@ -53,6 +53,8 @@ export type Agent = {
   createdAt: number;
   status: 'idle' | 'running' | 'done' | 'stopped' | 'broke' | 'revoked';
   running: boolean;
+  /** Hired on another chain; visible, and unable to work here. */
+  offNetwork: boolean;
   tasks: Task[];
 };
 

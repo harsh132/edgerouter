@@ -36,7 +36,8 @@ import {
 import { encodeFunctionData } from 'viem';
 import { registryAbi } from './abi';
 import { sendCalls, type Call } from './batch';
-import { ensName } from './client';
+import { createEnsClient, ensName } from './client';
+import { ENS } from './deployment';
 import { ALL_ROLES, deployRegistry, deployResolver } from './deploy';
 import { clearAddress, describeAgentCalls, profileCalls, type ProfileRecords } from './records';
 
@@ -75,6 +76,25 @@ export const canonicalIdOf = (label: string): bigint => labelIdOf(label) & ~((1n
 export const parentOf = (name: string): string | null => {
   const labels = ensName(name).split('.');
   return labels.length > 2 ? labels.slice(1).join('.') : null;
+};
+
+/**
+ * The resolver a name already resolves through, when it is one we can write to.
+ *
+ * The deployment's shared `publicResolver` is explicitly excluded. It is what a
+ * name points at by default, every setter on it reverts for an ordinary
+ * account, and inheriting it would turn a working mint into one that registers
+ * a name and then fails to write a single record to it.
+ */
+const resolverOfParent = async (parent: string): Promise<Address | null> => {
+  try {
+    const found = await createEnsClient().resolverOf(parent);
+    if (!found) return null;
+    return found.toLowerCase() === ENS.publicResolver.toLowerCase() ? null : (found as Address);
+  } catch {
+    // No resolution available — fall through to deploying one.
+    return null;
+  }
 };
 
 /** Far enough out that an agent does not expire mid-task. */
@@ -152,11 +172,25 @@ export const mintAgentName = async (
   const expiresAt = params.expiresAt ?? Date.now() + DEFAULT_TTL_MS;
 
   /*
-    The resolver is per-account and deploys once, so asking for it here is
-    cheap after the first time — `deployResolver` recovers the existing address
-    rather than failing when the salt is taken.
+    The resolver, found by asking what the parent already uses.
+
+    `deployResolver` recovers an existing deployment by searching for the
+    factory's `ProxyDeployed` event — and that search has a window, because
+    public RPCs cap `eth_getLogs` at 50,000 blocks. On Sepolia that is about a
+    week. Past it, redeploying reverts (the salt is taken), the recovery finds
+    nothing, and every mint fails permanently with a bare "deployProxy
+    reverted". Which is exactly what happened: names minted fine for days and
+    then stopped, for a reason that had nothing to do with names.
+
+    A parent's resolver is on chain and has no window. It is also the right
+    answer on its own terms — a subname minted under a name should resolve
+    through the same resolver as its parent, which is what `setup-root`
+    established in the first place. The deploy is kept as the last resort, for
+    the genuinely first run where nothing exists yet.
   */
-  const resolver = params.resolver ?? (await deployResolver(clients, { owner: account.address })).address;
+  const inherited = await resolverOfParent(params.parent);
+  const resolver =
+    params.resolver ?? inherited ?? (await deployResolver(clients, { owner: account.address })).address;
 
   /*
     The registry this name will own. Deployed before registration because

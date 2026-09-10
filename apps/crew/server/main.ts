@@ -16,7 +16,7 @@
  *
  * Bound to loopback, for the obvious reason.
  */
-import { formatAmount } from '../../../packages/sdk/src/index';
+import { ARC_TESTNET, formatAmount } from '../../../packages/sdk/src/index';
 import { ROOT_NAME } from '../../../packages/ens/src/index';
 import { addProject, agentById, boot, fire, hire, removeProject, update, type Runtime } from './crew';
 import { runTask, stop, isRunning } from './run';
@@ -49,7 +49,16 @@ const HERE = new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$
 
 const PORT = Number(process.env.CREW_PORT ?? 8800);
 const GATE = process.env.CREW_GATE ?? 'https://edgerouter-gate.prakashharsh32.workers.dev';
-const NETWORK = process.env.CREW_NETWORK ?? 'hedera:testnet';
+/*
+  Arc by default, which decides more than which chain settles.
+
+  The unit follows the network everywhere — `formatAmount` renders hbar for
+  `hedera:*` and USDC otherwise — so every budget, receipt and ledger row in the
+  app is denominated by this line. Arc also pays from a Circle Gateway balance
+  rather than a token balance, which is why an address here can hold USDC and
+  still be unable to buy anything until it is deposited.
+*/
+const NETWORK = process.env.CREW_NETWORK ?? ARC_TESTNET;
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body, (_key, value) => (typeof value === 'bigint' ? value.toString() : value)), {
@@ -102,6 +111,13 @@ const stateOf = (runtime: Runtime) => ({
   agents: runtime.crew.agents.map((agent) => ({
     ...agent,
     running: isRunning(agent.id),
+    /*
+      Hired on a different chain than the one this runtime opened. Shown rather
+      than hidden — the name was minted, the money was spent, and deleting the
+      record would be tidier and less true — but it cannot be given work, since
+      nothing here can pay for it.
+    */
+    offNetwork: agent.network !== runtime.wallet.network,
     grants: agent.grants ?? [],
     /*
       Always populated, even for an agent stored before permissions existed.

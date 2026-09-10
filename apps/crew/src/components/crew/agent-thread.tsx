@@ -107,7 +107,7 @@ export const AgentThread = ({ agent, state }: { agent: Agent; state: State }) =>
     gone, or the name is. Nothing here decides that — the runtime already did,
     and it did so by being refused.
   */
-  const spent = agent.status === 'revoked' || agent.status === 'broke';
+  const spent = agent.status === 'revoked' || agent.status === 'broke' || agent.offNetwork;
 
   /*
     Being out of money is recoverable and being revoked is not, so only one of
@@ -117,7 +117,7 @@ export const AgentThread = ({ agent, state }: { agent: Agent; state: State }) =>
     transaction attached.
   */
   const [raising, setRaising] = useState(false);
-  const canRaise = agent.status === 'broke';
+  const canRaise = agent.status === 'broke' && !agent.offNetwork;
 
   const send = async () => {
     const prompt = draft.trim();
@@ -199,7 +199,11 @@ export const AgentThread = ({ agent, state }: { agent: Agent; state: State }) =>
               value={draft}
               disabled={spent}
               placeholder={
-                spent ? `${nameOf(agent)} cannot spend any more` : `Give ${nameOf(agent)} a task`
+                agent.offNetwork
+                  ? `${nameOf(agent)} was hired on ${agent.network}, which this crew is not running`
+                  : spent
+                    ? `${nameOf(agent)} cannot spend any more`
+                    : `Give ${nameOf(agent)} a task`
               }
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
