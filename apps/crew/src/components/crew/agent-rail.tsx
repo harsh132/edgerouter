@@ -36,7 +36,12 @@ export const AgentRail = ({
   */
   <aside className="flex min-h-0 flex-col border-r bg-card text-card-foreground">
     <header className="flex items-center gap-2 px-4 py-3">
-      <h1 className="flex-1 text-sm font-semibold tracking-tight">Crew</h1>
+      {/*
+        "Agents", not "Crew". The brand moved to the bar above, and repeating it
+        here would label this column with the name of the whole application
+        rather than with what is in it.
+      */}
+      <h2 className="flex-1 text-sm font-semibold tracking-tight">Agents</h2>
       <Button
         variant="ghost"
         size="icon"

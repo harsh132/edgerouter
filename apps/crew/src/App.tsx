@@ -25,7 +25,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useCrew } from './api';
+import { TopBar } from '@/components/crew/top-bar';
+import { DepositPanel, WalletPicker } from '@/components/crew/connect-wallet';
+import { useWallet, WalletProvider } from '@/lib/use-wallet';
+import { useCrew, type State } from './api';
 
 const Waiting = ({ connected }: { connected: boolean }) => (
   <div className="grid h-full place-items-center p-10">
@@ -56,11 +59,70 @@ const NoAgents = ({ root, onHire }: { root: string; onHire: () => void }) => (
   </div>
 );
 
-export const App = () => {
-  const { state, connected, log } = useCrew();
+/**
+ * Everything below the bar.
+ *
+ * Split out so the wallet provider can sit above it: the bar and the funding
+ * dialog are the same connection, and a provider inside the component that
+ * renders both would be a provider that remounts with them.
+ */
+/**
+ * The wallet, opened from the bar.
+ *
+ * One dialog for both states rather than a menu and a separate funding screen:
+ * connecting and depositing are the same errand, and someone who opens this
+ * having never connected should not have to find a second thing to click.
+ */
+const WalletDialog = ({
+  state,
+  open,
+  onClose,
+}: {
+  state: State;
+  open: boolean;
+  onClose: () => void;
+}) => {
+  const { account } = useWallet();
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{account ? 'Your wallet' : 'Connect a wallet'}</DialogTitle>
+          <DialogDescription>
+            {state.funding ? (
+              <>
+                Agents pay per call from the crew&rsquo;s balance. Depositing puts money straight into what
+                they spend from — it never sits in a hot wallet as loose {state.funding.tokenSymbol}.
+              </>
+            ) : (
+              <>
+                There is no wallet funding route on <span className="font-mono">{state.network}</span>. Send
+                funds to the crew&rsquo;s address directly.
+              </>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        {state.funding ? (
+          account ? (
+            <DepositPanel route={state.funding} />
+          ) : (
+            <WalletPicker route={state.funding} />
+          )
+        ) : (
+          <p className="font-mono text-xs break-all">{state.account}</p>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const Room = ({ state, log }: { state: State; log: string[] }) => {
   const [selected, setSelected] = useState<string | null>(null);
   const [hiring, setHiring] = useState(false);
   const [folders, setFolders] = useState(false);
+  const [walletOpen, setWalletOpen] = useState(false);
 
   const agent = state?.agents.find((candidate) => candidate.id === selected) ?? null;
 
@@ -71,13 +133,14 @@ export const App = () => {
     screen with no way back.
   */
   useEffect(() => {
-    if (state && !agent && state.agents.length > 0) setSelected(state.agents[0]!.id);
+    if (!agent && state.agents.length > 0) setSelected(state.agents[0]!.id);
   }, [state, agent]);
 
-  if (!state) return <Waiting connected={connected} />;
-
   return (
-    <div className="grid h-full grid-cols-[17rem_minmax(0,1fr)_20rem]">
+    <div className="flex h-full flex-col">
+      <TopBar state={state} onWallet={() => setWalletOpen(true)} />
+
+      <div className="grid min-h-0 flex-1 grid-cols-[17rem_minmax(0,1fr)_20rem]">
       <AgentRail
         state={state}
         selected={selected}
@@ -101,8 +164,11 @@ export const App = () => {
       )}
 
       {agent ? <AgentDetail agent={agent} state={state} /> : <aside className="border-l bg-card" />}
+      </div>
 
       <HireDialog state={state} open={hiring} onClose={() => setHiring(false)} />
+
+      <WalletDialog state={state} open={walletOpen} onClose={() => setWalletOpen(false)} />
 
       <Dialog open={folders} onOpenChange={(next) => !next && setFolders(false)}>
         <DialogContent className="sm:max-w-lg">
@@ -117,5 +183,21 @@ export const App = () => {
         </DialogContent>
       </Dialog>
     </div>
+  );
+};
+
+export const App = () => {
+  const { state, connected, log } = useCrew();
+  if (!state) return <Waiting connected={connected} />;
+
+  /*
+    The provider wraps the room rather than living inside it, so the bar and the
+    funding dialog share one connection — and so it survives every re-render the
+    event stream causes, which is most of them.
+  */
+  return (
+    <WalletProvider route={state.funding}>
+      <Room state={state} log={log} />
+    </WalletProvider>
   );
 };
