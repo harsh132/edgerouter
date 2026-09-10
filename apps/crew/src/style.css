@@ -208,35 +208,6 @@
 }
 
 /*
-  Privy's modal, brought into this palette.
-
-  Its `accentColor` option does the links and buttons, and there is no option
-  for the panel itself: `theme` takes a hex but cannot be given a dark one —
-  `#08090a`, `#131315` and `#1c1c1e` each leave the modal unable to open at all,
-  silently, while `#ffffff` is fine. So the panel arrives as `#020713`, a navy,
-  which against a true-black canvas reads as a different application borrowed
-  into this one.
-
-  It renders into this document rather than an iframe, so it can simply be
-  told otherwise. That means depending on Privy's element ids, which is a real
-  cost and worth naming: if they rename these, the rules stop applying and the
-  modal goes back to navy. A cosmetic regression rather than a broken login,
-  which is the right way round for a risk like this to fall.
-*/
-#privy-modal-content {
-  background-color: var(--card) !important;
-  color: var(--foreground) !important;
-  border: 1px solid var(--border) !important;
-  border-radius: var(--radius) !important;
-  font-family: var(--font-sans) !important;
-}
-
-#privy-dialog-backdrop {
-  /* Ender's overlay: the canvas, mostly opaque, rather than a blue-black wash. */
-  background-color: rgba(8, 9, 10, 0.72) !important;
-}
-
-/*
   The pulse on an agent that is working.
 
   Only ever animating while money is actually moving, which is the one thing on
