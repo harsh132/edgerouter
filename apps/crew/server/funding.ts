@@ -62,3 +62,18 @@ const ARC: Omit<FundingRoute, 'depositor'> = {
  */
 export const fundingRouteFor = (network: string, account: string): FundingRoute | null =>
   network === 'eip155:5042002' ? { ...ARC, depositor: account } : null;
+
+/**
+ * The Privy application this page authenticates against.
+ *
+ * A public identifier rather than a secret — it ships in every client bundle
+ * that uses it, and Privy scopes what it can do by the origins configured
+ * against it in their dashboard. So it lives in source with an environment
+ * override, not in `.env` beside the keys, and confusing the two would mean
+ * treating a published string as sensitive while a real key sits next to it.
+ *
+ * Served from the runtime for the same reason the contract addresses are: one
+ * place that knows the configuration, rather than a page that carries its own
+ * copy and can disagree with it.
+ */
+export const privyAppId = (): string | null => process.env.PRIVY_APP_ID ?? 'cmtvmne8l002x0cl9zvp4lgc9';

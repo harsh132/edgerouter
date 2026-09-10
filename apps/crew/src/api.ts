@@ -113,6 +113,8 @@ export type State = {
   shortfall?: 'empty' | 'undeposited';
   naming: boolean;
   funding: FundingRoute | null;
+  /** Public client id for Privy. Null turns wallet connection off entirely. */
+  privyAppId: string | null;
   root: string;
   models: string[];
   permissions: PermissionInfo[];

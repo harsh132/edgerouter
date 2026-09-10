@@ -10,6 +10,7 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.85.1",
     "@earendil-works/pi-ai": "^0.85.1",
+    "@privy-io/react-auth": "^3.42.0",
     "@urbit/sigil-js": "^2.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

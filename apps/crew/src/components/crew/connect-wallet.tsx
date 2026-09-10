@@ -39,38 +39,28 @@ const toMinor = (text: string, decimals: number): bigint => {
   return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, '0') || '0');
 };
 
-/** The list of wallets in this browser, for when none is connected. */
+/**
+ * The button that opens Privy's modal.
+ *
+ * There is no list here any more. Privy owns discovery — extensions,
+ * WalletConnect, email, social — and a second list beside its modal would be
+ * this app guessing at what it found.
+ */
 export const WalletPicker = ({ route }: { route: FundingRoute }) => {
-  const { available, connect, connecting, error } = useWallet();
-
-  if (available.length === 0) {
-    return (
-      <p className="rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
-        No browser wallet found. Install one, or send {route.tokenSymbol} on {route.chainName} to{' '}
-        <span className="font-mono break-all">{route.depositor}</span> — though sending it to the address leaves
-        it undeposited, and depositing is what makes it spendable.
-      </p>
-    );
-  }
+  const { connect, connecting, error, ready } = useWallet();
 
   return (
     <div className="flex flex-col gap-2">
-      {available.map((wallet) => (
-        <button
-          key={wallet.name}
-          disabled={connecting}
-          onClick={() => void connect(wallet)}
-          className="flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-xs transition-colors hover:bg-accent/40 disabled:opacity-60"
-        >
-          {wallet.icon ? (
-            <img src={wallet.icon} alt="" className="size-4 shrink-0 rounded" />
-          ) : (
-            <WalletIcon className="size-4 shrink-0 text-muted-foreground" />
-          )}
-          <span className="flex-1 font-medium">{wallet.name}</span>
-          <span className="text-[11px] text-muted-foreground">{connecting ? 'connecting…' : 'connect'}</span>
-        </button>
-      ))}
+      <Button disabled={!ready || connecting} onClick={connect}>
+        <WalletIcon className="size-3.5" />
+        {connecting ? 'Connecting…' : 'Connect a wallet'}
+      </Button>
+
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        A browser extension, WalletConnect, or an email — whichever you have. Or send {route.tokenSymbol} on{' '}
+        {route.chainName} to <span className="font-mono break-all">{route.depositor}</span>, though that leaves
+        it undeposited and depositing is what makes it spendable.
+      </p>
 
       {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
     </div>

@@ -26,7 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { TopBar } from '@/components/crew/top-bar';
-import { DepositPanel, WalletPicker } from '@/components/crew/connect-wallet';
+import { DepositPanel } from '@/components/crew/connect-wallet';
 import { useWallet, WalletProvider } from '@/lib/use-wallet';
 import { useCrew, type State } from './api';
 
@@ -88,7 +88,7 @@ const WalletDialog = ({
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{account ? 'Your wallet' : 'Connect a wallet'}</DialogTitle>
+          <DialogTitle>Your wallet</DialogTitle>
           <DialogDescription>
             {state.funding ? (
               <>
@@ -104,12 +104,8 @@ const WalletDialog = ({
           </DialogDescription>
         </DialogHeader>
 
-        {state.funding ? (
-          account ? (
-            <DepositPanel route={state.funding} />
-          ) : (
-            <WalletPicker route={state.funding} />
-          )
+        {state.funding && account ? (
+          <DepositPanel route={state.funding} />
         ) : (
           <p className="font-mono text-xs break-all">{state.account}</p>
         )}
@@ -196,7 +192,7 @@ export const App = () => {
     event stream causes, which is most of them.
   */
   return (
-    <WalletProvider route={state.funding}>
+    <WalletProvider route={state.funding} appId={state.privyAppId}>
       <Room state={state} log={log} />
     </WalletProvider>
   );

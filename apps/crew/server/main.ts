@@ -35,7 +35,7 @@ import { MODELS } from './model';
 import { DEFAULT_PERMISSIONS, PERMISSIONS } from './permissions';
 import { FILE_PATH } from './store';
 import { pending, settle } from './requests';
-import { fundingRouteFor } from './funding';
+import { fundingRouteFor, privyAppId } from './funding';
 
 /*
   Declared rather than imported from `@types/bun`.
@@ -98,6 +98,7 @@ const stateOf = (runtime: Runtime) => ({
     Null is a real answer — see `fundingRouteFor`.
   */
   funding: fundingRouteFor(runtime.wallet.network, runtime.wallet.account),
+  privyAppId: privyAppId(),
   naming: runtime.naming,
   root: ROOT_NAME,
   models: MODELS,

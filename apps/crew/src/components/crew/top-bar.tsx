@@ -39,8 +39,16 @@ const Brand = () => (
 );
 
 export const TopBar = ({ state, onWallet }: { state: State; onWallet: () => void }) => {
-  const { account, ensName, connecting } = useWallet();
+  const { account, ensName, connecting, connect, ready } = useWallet();
 
+  /*
+    Connecting goes straight to Privy's modal rather than through a dialog of
+    ours first. Privy renders into its own portal, and opening it from inside a
+    Radix dialog leaves two focus traps fighting over the same email field — the
+    browser console says so out loud. Our dialog is for depositing, which only
+    means anything once a wallet is attached, so it is what the connected pill
+    opens instead.
+  */
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-card px-4">
       <Brand />
@@ -71,7 +79,7 @@ export const TopBar = ({ state, onWallet }: { state: State; onWallet: () => void
             <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
           </button>
         ) : (
-          <Button size="sm" className="h-8" disabled={connecting} onClick={onWallet}>
+          <Button size="sm" className="h-8" disabled={!ready || connecting} onClick={connect}>
             <WalletIcon className="size-3.5" />
             {connecting ? 'Connecting…' : 'Connect Wallet'}
           </Button>
