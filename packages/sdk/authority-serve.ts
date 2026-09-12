@@ -1,7 +1,6 @@
 /**
  * Runs a budget authority on loopback.
  *
- *   HEDERA_ACCOUNT_ID=0.0.x HEDERA_PRIVATE_KEY=... \
  *   bun packages/sdk/authority-serve.ts --fund 1.0
  *
  * It prints the root capability once, on stdout, and never again. That is the
@@ -16,7 +15,7 @@
  * machine that is exactly right. On 0.0.0.0 it is a wallet with an HTTP
  * interface, so binding it there is not offered.
  */
-import { createAuthority, authorityHandler, hederaSigner, formatHbar } from './src/index';
+import { createAuthority, authorityHandler, loadOrCreateWallet, formatHbar } from './src/index';
 
 /*
   Declared locally rather than by taking `@types/bun`. This repo also compiles
@@ -42,12 +41,7 @@ function die(message: string): never {
   process.exit(1);
 }
 
-const ACCOUNT = process.env.HEDERA_ACCOUNT_ID;
-const KEY = process.env.HEDERA_PRIVATE_KEY;
 const SECRET = process.env.EDGEROUTER_AUTHORITY_SECRET;
-
-if (!ACCOUNT) die('set HEDERA_ACCOUNT_ID to the paying account');
-if (!KEY) die('set HEDERA_PRIVATE_KEY in the environment — never as an argument');
 
 /*
   Generated when absent rather than defaulted to something. A default secret is
@@ -67,7 +61,14 @@ const fundedMinor = BigInt(Math.round(hbar * 1e8));
 const port = Number(arg('port') ?? '8790');
 const network = arg('network') ?? 'hedera:testnet';
 
-const signer = hederaSigner({ accountId: ACCOUNT, privateKey: KEY, network });
+const { wallet, path } = loadOrCreateWallet({ network });
+const funding = await wallet.refresh();
+if (!funding.funded) {
+  die(`the wallet has no account yet — send hbar to ${wallet.evmAddress}
+  stored at ${path}`);
+}
+
+const signer = wallet.signer();
 const authority = await createAuthority({
   signer,
   secret,

@@ -7,9 +7,9 @@
  * you run rather than part of `bun run check`. Nothing else needs a key, and
  * nothing else should have one.
  *
- *   HEDERA_ACCOUNT_ID=0.0.x HEDERA_PRIVATE_KEY=... bun packages/sdk/pay-check.ts [url]
+ *   bun packages/sdk/pay-check.ts [url]
  *
- * The key is read from the environment only. Do not pass it as an argument —
+ * The key is read from the wallet on disk only. Do not pass it as an argument —
  * arguments end up in shell history and in process listings. It is never
  * printed here, and the failure paths are written so it cannot appear in an
  * error message either.
@@ -21,11 +21,9 @@
  *   2. how long settlement actually takes, which is the input to whether
  *      batching is worth building (docs/BATCH-SETTLEMENT.md)
  */
-import { payAndFetch, hederaSigner, formatHbar, PaymentRefused } from './src/index';
+import { payAndFetch, loadOrCreateWallet, formatHbar, PaymentRefused } from './src/index';
 
 const URL_ARG = process.argv[2] ?? 'http://127.0.0.1:8787/v1/chat/completions';
-const ACCOUNT = process.env.HEDERA_ACCOUNT_ID;
-const KEY = process.env.HEDERA_PRIVATE_KEY;
 const CAPABILITY = process.env.EDGEROUTER_TOKEN;
 
 /** A cap this script cannot exceed regardless of what the server quotes. */
@@ -40,9 +38,6 @@ function die(message: string): never {
   process.exit(1);
 }
 
-if (!ACCOUNT) die('set HEDERA_ACCOUNT_ID to the payer account (not the gate’s payTo)');
-if (!KEY) die('set HEDERA_PRIVATE_KEY in the environment — never as an argument');
-
 const balanceOf = async (account: string): Promise<bigint | null> => {
   try {
     const response = await fetch(`${MIRROR}/api/v1/accounts/${account}`);
@@ -54,7 +49,14 @@ const balanceOf = async (account: string): Promise<bigint | null> => {
   }
 };
 
-const signer = hederaSigner({ accountId: ACCOUNT!, privateKey: KEY!, network: 'hedera:testnet' });
+const { wallet, path } = loadOrCreateWallet({ network: 'hedera:testnet' });
+const walletFunding = await wallet.refresh();
+if (!walletFunding.funded) {
+  die(`the wallet has no account yet — send hbar to ${wallet.evmAddress}
+  stored at ${path}`);
+}
+
+const signer = wallet.signer();
 
 console.log(`\n  payer     ${signer.accountId}`);
 console.log(`  resource  ${URL_ARG}`);

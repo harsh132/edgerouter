@@ -151,7 +151,8 @@ On EVM chains there is an asymmetry worth knowing before you fund one:
 ### Other places the money can come from
 
 **`environment`** — for CI, or an account you already have. Reads
-`HEDERA_ACCOUNT_ID` and `HEDERA_PRIVATE_KEY`. Note that DSH Desktop launches
+`EDGEROUTER_ACCOUNT_ID` and `EDGEROUTER_PRIVATE_KEY`; set `privateKeyEnv` to
+read the key from some other variable instead. Note that DSH Desktop launches
 from the tray and inherits no shell, so these have to be set as user-level
 environment variables to reach it.
 

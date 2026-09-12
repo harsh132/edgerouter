@@ -12,14 +12,13 @@
  *
  *   bun packages/sdk/delegate-live-check.ts [gate-url]
  *
- * Uses the generated wallet by default, or HEDERA_ACCOUNT_ID / HEDERA_PRIVATE_KEY
- * when both are set. It spends. Not part of `bun run check`.
+ * Pays from the one wallet, the same one the crew spends from. It spends. Not
+ * part of `bun run check`.
  */
 import {
   createAuthority,
   authorityHandler,
   connectAuthority,
-  hederaSigner,
   loadOrCreateWallet,
   payAndFetch,
   formatHbar,
@@ -44,23 +43,12 @@ function die(message: string): never {
   process.exit(1);
 }
 
-let signer: PaymentSigner;
-let payerNote: string;
+const { wallet } = loadOrCreateWallet({ network: NETWORK });
+const funding = await wallet.refresh();
+if (!funding.funded) die(`the wallet has no funds — send hbar to ${wallet.evmAddress}`);
 
-if (process.env.HEDERA_ACCOUNT_ID && process.env.HEDERA_PRIVATE_KEY) {
-  signer = hederaSigner({
-    accountId: process.env.HEDERA_ACCOUNT_ID,
-    privateKey: process.env.HEDERA_PRIVATE_KEY,
-    network: NETWORK,
-  });
-  payerNote = `${signer.accountId} (from the environment)`;
-} else {
-  const { wallet } = loadOrCreateWallet({ network: NETWORK });
-  const funding = await wallet.refresh();
-  if (!funding.funded) die(`the generated wallet has no funds — send hbar to ${wallet.evmAddress}`);
-  signer = wallet.signer();
-  payerNote = `${funding.accountId} (generated wallet, ${formatHbar(funding.balanceMinor)})`;
-}
+const signer: PaymentSigner = wallet.signer();
+const payerNote = `${funding.accountId} (${formatHbar(funding.balanceMinor)})`;
 
 /*
   A budget deliberately smaller than three calls cost. The interesting moment

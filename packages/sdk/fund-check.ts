@@ -8,26 +8,39 @@
  * hold, the entire "the user never types anything" design collapses back into
  * asking for an account id.
  *
- * It spends. Testnet only, and the funding account comes from the environment:
+ * It spends. Testnet only, and the funding account is the wallet:
  *
- *   HEDERA_ACCOUNT_ID=0.0.x HEDERA_PRIVATE_KEY=... \
  *   bun packages/sdk/fund-check.ts [hbar]
  *
  * Not part of `bun run check`.
  */
 import { AccountId, Client, Hbar, TransferTransaction } from '@x402/hedera';
-import { generateWallet, openWallet, parsePrivateKey, formatHbar } from './src/index';
-
-const FUNDER = process.env.HEDERA_ACCOUNT_ID;
-const KEY = process.env.HEDERA_PRIVATE_KEY;
+import {
+  generateWallet,
+  openWallet,
+  parsePrivateKey,
+  formatHbar,
+  loadOrCreateWallet,
+} from './src/index';
 
 function die(message: string): never {
   console.error(`\n  ${message}\n`);
   process.exit(1);
 }
 
-if (!FUNDER) die('set HEDERA_ACCOUNT_ID to a funded testnet account');
-if (!KEY) die('set HEDERA_PRIVATE_KEY in the environment — never as an argument');
+/*
+  The funder is the wallet; the recipient is generated fresh below. They are
+  different accounts, which is all this check needs of them — the question is
+  whether an address that has never existed becomes an account when paid.
+*/
+const funder = loadOrCreateWallet({ network: 'hedera:testnet' });
+const funderFunding = await funder.wallet.refresh();
+if (!funderFunding.funded || !funderFunding.accountId) {
+  die(`the wallet has no account to fund from — send hbar to ${funder.wallet.evmAddress}
+  stored at ${funder.path}`);
+}
+const FUNDER = funderFunding.accountId;
+const KEY = funder.wallet.exportPrivateKey();
 
 const hbar = Number(process.argv[2] ?? '1');
 if (!Number.isFinite(hbar) || hbar <= 0) die('the amount must be a positive number of hbar');

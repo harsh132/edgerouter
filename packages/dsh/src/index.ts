@@ -67,8 +67,15 @@ const PROVIDER = 'edgerouter';
 const NS = 'llm-edgerouter';
 
 const DEFAULT_CAPABILITY_ENV = 'EDGEROUTER_CAPABILITY';
-const DEFAULT_ACCOUNT_ENV = 'HEDERA_ACCOUNT_ID';
-const DEFAULT_KEY_ENV = 'HEDERA_PRIVATE_KEY';
+/*
+  Named for this plugin rather than for a chain. The `environment` source pays
+  on EVM chains too — the branch below is explicit about it — so a chain-specific
+  variable name was describing one of the networks it serves and not the rest.
+  `privateKeyEnv` still overrides the name, which is how an existing install
+  keeps whatever it was already reading.
+*/
+const DEFAULT_ACCOUNT_ENV = 'EDGEROUTER_ACCOUNT_ID';
+const DEFAULT_KEY_ENV = 'EDGEROUTER_PRIVATE_KEY';
 /**
  * The public gate.
  *

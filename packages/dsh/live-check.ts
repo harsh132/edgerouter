@@ -7,19 +7,16 @@
  * actual 402 rather than my idea of one.
  *
  * Not part of `bun run check`: it spends. Same rules as `pay-check.ts` — the key
- * comes from the environment, never an argument, and is never printed.
+ * stays on disk in the wallet, never an argument, and is never printed.
  *
- *   HEDERA_ACCOUNT_ID=0.0.x HEDERA_PRIVATE_KEY=... \
  *   EDGEROUTER_TOKEN=$(bun apps/gate/mint-token.ts 2>/dev/null) \
  *   bun packages/dsh/live-check.ts [base-url]
  */
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm';
-import { hederaSigner, formatHbar, loadOrCreateWallet } from '../sdk/src/index';
+import { formatHbar, loadOrCreateWallet, type PaymentSigner } from '../sdk/src/index';
 import { EdgerouterAdapter, type Paid } from './src/adapter';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:8789';
-const ACCOUNT = process.env.HEDERA_ACCOUNT_ID;
-const KEY = process.env.HEDERA_PRIVATE_KEY;
 const CAPABILITY = process.env.EDGEROUTER_TOKEN;
 
 function die(message: string): never {
@@ -28,26 +25,18 @@ function die(message: string): never {
 }
 
 /*
-  The generated wallet by default, because that is the path a user actually
-  takes. The environment still wins when it is set, so CI and anyone with an
-  existing funded account can drive the same check without a second wallet.
+  The wallet, which is the path a user actually takes — and now the only one.
+  There used to be an environment override here for CI and for anyone with an
+  existing funded account; it was a second key to keep, and this repo keeps one.
 */
-let signerFor: () => ReturnType<typeof hederaSigner>;
-let payer: string;
-
-if (ACCOUNT && KEY) {
-  signerFor = () => hederaSigner({ accountId: ACCOUNT, privateKey: KEY, network: 'hedera:testnet' });
-  payer = `${ACCOUNT} (from the environment)`;
-} else {
-  const { wallet, path } = loadOrCreateWallet({ network: 'hedera:testnet' });
-  const funding = await wallet.refresh();
-  if (!funding.funded) {
-    die(`the generated wallet has no funds — send hbar to ${wallet.evmAddress}
+const { wallet, path } = loadOrCreateWallet({ network: 'hedera:testnet' });
+const funding = await wallet.refresh();
+if (!funding.funded) {
+  die(`the wallet has no funds — send hbar to ${wallet.evmAddress}
   stored at ${path}`);
-  }
-  signerFor = () => wallet.signer();
-  payer = `${funding.accountId} (generated wallet, ${formatHbar(funding.balanceMinor)})`;
 }
+const signerFor = (): PaymentSigner => wallet.signer();
+const payer = `${funding.accountId} (${formatHbar(funding.balanceMinor)})`;
 // Deliberately not required: the gate is permissionless, and running this
 // without a token is the more important case to be able to test.
 

@@ -2,28 +2,35 @@
  * Sends testnet hbar to an address, the way a user would from their own wallet.
  *
  * Exists so the funding step of the local-wallet flow can be exercised without
- * a faucet in the loop. It is the *other side* of the wallet — what a user's
- * existing account does — so it deliberately reads the funding key from the
- * environment and never touches the generated wallet at all.
+ * a faucet in the loop. It sends from the wallet — the same one everything else
+ * here pays from — to wherever you name.
  *
- *   HEDERA_ACCOUNT_ID=0.0.x HEDERA_PRIVATE_KEY=... \
  *   bun packages/sdk/send.ts 0xabc… 2
+ *
+ * It used to read a second account out of the environment, on the reasoning
+ * that this script plays "the user's existing wallet" and so should not touch
+ * the generated one. That was a second private key to hold, and holding one is
+ * the point of the design; `sweep` already covers emptying this wallet into an
+ * account you own elsewhere.
  *
  * Not part of `bun run check`: it spends.
  */
 import { AccountId, Client, Hbar, TransferTransaction } from '@x402/hedera';
-import { parsePrivateKey, formatHbar } from './src/index';
-
-const FUNDER = process.env.HEDERA_ACCOUNT_ID;
-const KEY = process.env.HEDERA_PRIVATE_KEY;
+import { parsePrivateKey, formatHbar, loadOrCreateWallet } from './src/index';
 
 function die(message: string): never {
   console.error(`\n  ${message}\n`);
   process.exit(1);
 }
 
-if (!FUNDER) die('set HEDERA_ACCOUNT_ID to the funding account');
-if (!KEY) die('set HEDERA_PRIVATE_KEY in the environment — never as an argument');
+const { wallet, path } = loadOrCreateWallet({ network: 'hedera:testnet' });
+const funding = await wallet.refresh();
+if (!funding.funded || !funding.accountId) {
+  die(`the wallet has no account yet — send hbar to ${wallet.evmAddress}
+  stored at ${path}`);
+}
+const FUNDER = funding.accountId;
+const KEY = wallet.exportPrivateKey();
 
 const to = process.argv[2];
 const hbar = Number(process.argv[3] ?? '1');

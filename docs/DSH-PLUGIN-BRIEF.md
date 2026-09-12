@@ -235,8 +235,6 @@ cleanly*. If you touch pricing, read the comment in `networks.ts` first.
 Working example, end to end:
 
 ```bash
-HEDERA_ACCOUNT_ID=0.0.10400904 \
-HEDERA_PRIVATE_KEY=<from .env> \
 EDGEROUTER_TOKEN=$(bun apps/gate/mint-token.ts 2>/dev/null) \
 bun run pay-check http://127.0.0.1:8789/v1/chat/completions
 ```
