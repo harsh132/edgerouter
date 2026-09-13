@@ -5,6 +5,10 @@
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "TAB", "class_name": "Tab" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Tab"] }],
   "vars": {
     // Verified live against https://api.testnet.blocky402.com/supported.
     //

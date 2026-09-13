@@ -162,6 +162,37 @@ export const spend = (
   return ok(withNodes(tree, [{ ...node, balanceMinor: node.balanceMinor - params.amountMinor }]));
 };
 
+/**
+ * Returns part of an earlier spend to the node that made it.
+ *
+ * The inverse of `spend`, and it exists for one reason: a payment whose final
+ * price is not known when it is authorised. A tab voucher is charged at its
+ * ceiling the moment it is signed — the same "err toward having spent" rule
+ * every other payment follows — and the difference comes back once the gate
+ * says what the call actually cost.
+ *
+ * This file cannot tell a genuine release from an invented one, because it
+ * does not know what was spent on whose behalf. That bound lives with the
+ * caller, which does: the authority releases only against a reservation it
+ * recorded itself, once, and never for more than was reserved. Here the only
+ * rules are the arithmetic ones — no negative amounts, no unknown nodes.
+ *
+ * Conservation still holds, with the caller subtracting what it releases from
+ * what it counts as spent. Money comes back into the tree only because it left
+ * it; nothing is minted.
+ */
+export const release = (
+  tree: Tree,
+  params: { node: NodeId; amountMinor: bigint },
+): Result<Tree> => {
+  if (params.amountMinor < 0n) return err({ code: 'negative_amount' });
+
+  const node = tree.nodes.get(params.node);
+  if (!node) return err({ code: 'unknown_node', id: params.node });
+
+  return ok(withNodes(tree, [{ ...node, balanceMinor: node.balanceMinor + params.amountMinor }]));
+};
+
 /** Everything still held anywhere in the tree. */
 export const totalHeld = (tree: Tree): bigint =>
   [...tree.nodes.values()].reduce((sum, node) => sum + node.balanceMinor, 0n);

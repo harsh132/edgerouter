@@ -22,7 +22,8 @@ import {
   quoteOf,
   type PaymentRequired,
 } from './src/x402';
-import { priceFor, MODELS } from './src/pricing';
+import { priceFor, modelFor, chargeFor, MODELS } from './src/pricing';
+import { UsageScanner, usageFromJson } from './src/meter';
 import { parseNetworks, sameIdentifier, selectNetwork, type NetworkConfig } from './src/networks';
 
 let failures = 0;
@@ -65,7 +66,7 @@ const HEDERA: NetworkConfig = {
 const reqs = requirements({
   request: REQUEST,
   amountMinor: 1_000n,
-  description: 'edgerouter inference: deepseek/deepseek-chat',
+  description: 'edgerouter inference: deepseek/deepseek-v4-flash',
   network: EVM,
 });
 
@@ -323,9 +324,80 @@ check(!unknownNet.ok, 'an unconfigured network is refused, not silently defaulte
 
 console.log('\nPricing\n');
 
-check(priceFor('deepseek/deepseek-chat') === 1_000n, 'a known model has a price');
+check(priceFor('deepseek/deepseek-v4-flash') === 1_000n, 'a known model has a per-call price');
 check(priceFor('not/a-model') === null, 'an unknown model has no default price');
-check(MODELS.every((m) => m.minorPerCall > 0n), 'every listed model costs something');
+check(modelFor('not/a-model') === null, 'an unknown model has no tab price either');
+check(MODELS.length <= 3, `the gate offers a short list of cheap models (${MODELS.length})`);
+check(
+  MODELS.every((m) => m.flatMinor > 0n && m.reserveMinor >= m.flatMinor),
+  'every model costs something, and its tab reserve covers at least its flat price',
+);
+
+/* -------------------------------------------------------------------------- */
+/* 7b. Tab charges — what a call actually cost                                 */
+/* -------------------------------------------------------------------------- */
+
+console.log('\nTab charges\n');
+
+{
+  const model = modelFor('deepseek/deepseek-v4-flash')!;
+
+  check(chargeFor(model, { cost: 0.000123 }) === 123n, "OpenRouter's reported cost is charged, in minor units");
+  check(chargeFor(model, { cost: 0.0000001 }) === 1n, 'a served call is never charged zero');
+  check(chargeFor(model, { cost: 0.0000011 }) === 2n, 'cost rounds up, not down');
+  check(chargeFor(model, { cost: 5 }) === model.reserveMinor, 'a charge is capped at the reserve');
+
+  // 1,000,000 prompt tokens at 50_000/M plus 1,000,000 completion at 100_000/M.
+  check(
+    chargeFor(model, { prompt_tokens: 1000, completion_tokens: 1000 }) === 150n,
+    'without a cost, token counts are priced from the table',
+  );
+  check(chargeFor(model, null) === model.reserveMinor, 'no usage at all charges the reserve');
+  check(chargeFor(model, {}) === model.reserveMinor, 'usage with nothing in it charges the reserve');
+  check(
+    chargeFor(model, { cost: 'free', prompt_tokens: 10, completion_tokens: 0 }) === 1n,
+    'a cost that is not a number falls back to tokens',
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* 7c. Metering reads usage out of whatever the upstream sent                  */
+/* -------------------------------------------------------------------------- */
+
+console.log('\nMetering\n');
+
+{
+  const stream = [
+    ': OPENROUTER PROCESSING\n\n',
+    'data: {"choices":[{"delta":{"content":"hel"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
+    'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"cost":0.000042}}\n\n',
+    'data: [DONE]\n\n',
+  ].join('');
+
+  const whole = new UsageScanner();
+  whole.push(stream);
+  check(whole.finish()?.cost === 0.000042, 'usage is found in the last data event of a stream');
+
+  // Split everywhere, including mid-line, the way a network actually delivers it.
+  const split = new UsageScanner();
+  for (let i = 0; i < stream.length; i += 7) split.push(stream.slice(i, i + 7));
+  check(split.finish()?.prompt_tokens === 12, 'usage survives the stream arriving in arbitrary chunks');
+
+  const none = new UsageScanner();
+  none.push('data: {"choices":[{"delta":{"content":"x"}}]}\n\n');
+  check(none.finish() === null, 'a stream cut off before usage reports none');
+
+  const trailing = new UsageScanner();
+  trailing.push('data: {"usage":{"cost":0.001}}');
+  check(trailing.finish()?.cost === 0.001, 'a final line with no newline after it is still read');
+
+  check(
+    usageFromJson('{"choices":[],"usage":{"completion_tokens":9}}')?.completion_tokens === 9,
+    'usage is found in a plain JSON body',
+  );
+  check(usageFromJson('not json') === null, 'a body that is not JSON has no usage');
+}
 
 /* ------------------------------------------------------------------- pricing units */
 

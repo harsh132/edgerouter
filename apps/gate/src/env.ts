@@ -32,6 +32,14 @@ export type Env = {
   /** Upstream inference. Any OpenAI-compatible endpoint. */
   OPENROUTER_API_KEY?: string;
   UPSTREAM_URL?: string;
+
+  /**
+   * Prepaid tabs, one Durable Object per payer per network — see ./tab.
+   *
+   * Optional so a gate deployed without the binding still serves per-call
+   * payments exactly as before; the tab routes answer that they are closed.
+   */
+  TAB?: DurableObjectNamespace<import('./tab').Tab>;
 };
 
 /**

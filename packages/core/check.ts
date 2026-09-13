@@ -24,6 +24,7 @@ import {
   conserves,
   createTree,
   delegate,
+  release,
   revoke,
   spend,
   subtree,
@@ -383,12 +384,31 @@ console.log('\nBudget tree\n');
     let tree: Tree = createTree('root', FUNDED);
     let spent = 0n;
     let nextId = 0;
+    /*
+      Spends still open to a partial release, the way a tab voucher is: charged
+      at its ceiling when signed, and part of it returned once the real price is
+      known. Each is released at most once and never for more than it spent —
+      the rule the authority keeps, exercised here against random revocations
+      that can remove the node before its release arrives.
+    */
+    const open: { node: string; amount: bigint }[] = [];
 
     for (let step = 0; step < 40; step += 1) {
       const ids = [...tree.nodes.keys()];
       const target = pick(ids);
 
-      switch (randInt(3)) {
+      switch (randInt(4)) {
+        case 3: {
+          if (open.length === 0) break;
+          const [reservation] = open.splice(randInt(open.length), 1);
+          const back = reservation!.amount === 0n ? 0n : BigInt(randInt(Number(reservation!.amount) + 1));
+          const result = release(tree, { node: reservation!.node, amountMinor: back });
+          if (result.ok) {
+            tree = result.value;
+            spent -= back;
+          }
+          break;
+        }
         case 0: {
           const held = tree.nodes.get(target)!.balanceMinor;
           const amount = held === 0n ? 0n : BigInt(randInt(Number(held)) + 1);
@@ -408,6 +428,7 @@ console.log('\nBudget tree\n');
           if (result.ok) {
             tree = result.value;
             spent += amount;
+            open.push({ node: target, amount });
           }
           break;
         }
@@ -431,7 +452,10 @@ console.log('\nBudget tree\n');
     }
   }
 
-  check(broken === null, `money is conserved across 500 random traces${broken ? ` — ${broken}` : ''}`);
+  check(
+    broken === null,
+    `money is conserved across 500 random traces, releases included${broken ? ` — ${broken}` : ''}`,
+  );
   check(deepest <= 4, `depth bound held (deepest observed ${deepest})`);
 }
 
@@ -470,6 +494,21 @@ console.log('\nBudget tree\n');
 
   const rootRevoke = revoke(deep, 'root');
   check(!rootRevoke.ok, 'the root cannot be revoked — there is nobody above it');
+
+  const spentTree = spend(createTree('root', 100n), { node: 'root', amountMinor: 30n });
+  const released = spentTree.ok ? release(spentTree.value, { node: 'root', amountMinor: 20n }) : null;
+  check(
+    released !== null && released.ok && released.value.nodes.get('root')!.balanceMinor === 90n,
+    'a release returns money to the node that spent it',
+  );
+  check(
+    !release(createTree('root', 1n), { node: 'root', amountMinor: -1n }).ok,
+    'a negative release is refused',
+  );
+  check(
+    !release(createTree('root', 1n), { node: 'gone', amountMinor: 1n }).ok,
+    'a release to a node that no longer exists is refused — the money is not reassigned',
+  );
 }
 
 console.log(
