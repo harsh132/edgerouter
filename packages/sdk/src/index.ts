@@ -17,3 +17,5 @@ export * from './delegate/server';
 export * from './delegate/client';
 export * from './delegate/node-server';
 export * from './wallet/gateway';
+export * from './tab/voucher';
+export * from './tab/client';

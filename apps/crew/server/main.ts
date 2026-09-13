@@ -87,6 +87,13 @@ const stateOf = (runtime: Runtime) => ({
     ? {}
     : { held: formatAmount(runtime.wallet.network, runtime.wallet.heldMinor) }),
   /*
+    Prepaid at the gate, and already inside `spendable`. Shown separately so a
+    top-up reads as money moving rather than money leaving.
+  */
+  ...(runtime.wallet.tabMinor === undefined
+    ? {}
+    : { tab: formatAmount(runtime.wallet.network, runtime.wallet.tabMinor) }),
+  /*
     What the user has to do before anything can be bought, if anything. The
     page needs the distinction: money missing and money undeposited are one
     transaction apart and share no instructions.

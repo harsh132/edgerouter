@@ -23,7 +23,7 @@ import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completio
 import { randomUUID } from 'node:crypto';
 import { defaultMaxAmount, formatAmount } from '../../../packages/sdk/src/index';
 import { allows as permitted } from '../../../packages/core/src/caveat';
-import { modelFor } from './model';
+import { MODELS, modelFor } from './model';
 import { payingFetch, BudgetExhausted } from './paying-fetch';
 import { connectionFor, publish, rootsFor, update, type Runtime } from './crew';
 import { ask, abandon } from './requests';
@@ -139,7 +139,29 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
       task.steps.push(step);
       emit({ type: 'step', agentId: agent.id, step, spentMinor: agent.spentMinor });
       publish(runtime);
+
+      /*
+        A tab call is recorded at its ceiling, matching what the authority
+        reserved, and corrected here once the gate has said what it cost. The
+        step keeps its place; only its price and the agent's total change.
+        Published rather than emitted as a step, because the step already
+        exists and a second `step` event would read as another call.
+      */
+      return ({ chargedMinor, releasedMinor }) => {
+        agent.spentMinor = (BigInt(agent.spentMinor) - releasedMinor).toString();
+        step.costMinor = chargedMinor.toString();
+        publish(runtime);
+      };
     },
+    ...(runtime.tab
+      ? {
+          tab: {
+            terms: runtime.tab,
+            connection: () => runtime.connections.get(agent.id) ?? connection,
+            topUp: (shortfall) => runtime.topUp(shortfall),
+          },
+        }
+      : {}),
     /*
       Kept here rather than relied on from the throw. pi swallows the error and
       substitutes its own text, so by the time the run ends the only evidence
@@ -173,6 +195,18 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
   });
 
   const missing = ALL_PERMISSIONS.filter((permission) => !allows(permission));
+
+  /*
+    The gate's list is short and changes. An agent hired onto a model the gate
+    no longer sells would be refused on its first call with a message about
+    pricing, so it is moved to the first one on offer — and told about, because
+    a model is the one choice the person hiring it actually made.
+  */
+  if (!(MODELS as readonly string[]).includes(agent.model)) {
+    emit({ type: 'log', text: `${agent.label} was on ${agent.model}, which the gate no longer offers; now ${MODELS[0]}` });
+    agent.model = MODELS[0];
+    publish(runtime);
+  }
 
   const model = modelFor(runtime.gate, agent.model);
   const api = openAICompletionsApi();
@@ -208,7 +242,10 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
         'call is a step you pay for too. Work in as few steps as you can, and',
         'stop when the task is done.',
         `You have ${formatAmount(agent.network, BigInt(agent.budgetMinor) - BigInt(agent.spentMinor))} left ` +
-          `of ${formatAmount(agent.network, BigInt(agent.budgetMinor))}, and a call costs roughly a fortieth of an hbar.`,
+          `of ${formatAmount(agent.network, BigInt(agent.budgetMinor))}, and ` +
+          (agent.network.startsWith('hedera:')
+            ? 'a call costs roughly a fortieth of an hbar.'
+            : 'a call is charged for the tokens it uses — usually a small fraction of a cent.'),
         /*
           Told what it may do about running out, because the prompt used to say
           the budget "cannot be raised" — true before `request_budget` existed

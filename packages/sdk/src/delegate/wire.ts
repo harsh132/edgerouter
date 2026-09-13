@@ -8,6 +8,7 @@
  * the money follows.
  */
 import type { PaymentRequirements } from '../pay/types';
+import type { SignedVoucher } from '../tab/voucher';
 
 /** `POST /sign` — "authorise this exact payment against my budget." */
 export type SignRequest = {
@@ -34,6 +35,39 @@ export type SignResponse = {
   /** What is left in the caller's node after this payment. */
   remainingMinor: string;
 };
+
+/**
+ * `POST /voucher` — "let me spend from the wallet's tab for one call."
+ *
+ * The tab equivalent of `/sign`, with the same rule underneath: the authority
+ * charges the node the amount it signs. A voucher signs a ceiling, so the
+ * ceiling is what is reserved, and `/voucher/settle` returns the part the call
+ * did not use.
+ */
+export type VoucherRequest = {
+  quote: { network: string; payTo: string; reserveMinor: string };
+  /** The gate's URL. Its origin must be one this authority settles tabs with. */
+  resourceUrl: string;
+};
+
+export type VoucherResponse = {
+  voucher: SignedVoucher;
+  reservedMinor: string;
+  remainingMinor: string;
+};
+
+/**
+ * `POST /voucher/settle` — "find out what that call cost."
+ *
+ * The caller names a nonce and nothing else. What was charged is asked of the
+ * gate by the authority itself — a receipt the agent forwarded would be a claim
+ * made by the one party with a reason to understate it.
+ */
+export type VoucherSettleRequest = { nonce: string };
+
+export type VoucherSettleResponse =
+  | { status: 'settled'; chargedMinor: string; releasedMinor: string; remainingMinor: string | null }
+  | { status: 'pending'; remainingMinor: string | null };
 
 /** `POST /mint` — "give one of my children part of what I hold." */
 export type MintRequest = {
@@ -95,6 +129,9 @@ export type AuthorityRefusal =
   | 'not_a_descendant'
   | 'pay_to_not_permitted'
   | 'wrong_network'
-  | 'signing_failed';
+  | 'signing_failed'
+  | 'tabs_disabled'
+  | 'tab_origin_not_permitted'
+  | 'unknown_voucher';
 
 export type AuthorityError = { error: { code: AuthorityRefusal; detail: string } };

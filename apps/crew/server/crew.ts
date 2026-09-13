@@ -21,11 +21,15 @@ import {
   createAuthority,
   authorityHandler,
   connectAuthority,
+  fetchTabTerms,
+  payAndFetch,
   serveAuthority,
   formatAmount,
   type Authority,
   type Connection,
   type ServedAuthority,
+  type TabShortfall,
+  type TabTerms,
 } from '../../../packages/sdk/src/index';
 import {
   createEnsClient,
@@ -67,8 +71,64 @@ export type Runtime = {
   /** Whether names can be minted. False when the root name owns no registry. */
   naming: boolean;
   server: ServedAuthority;
+  /**
+   * The gate's tab terms on this network, or null when it keeps none.
+   *
+   * Null is an ordinary answer, not a failure: agents then pay per call, as
+   * they did before tabs existed.
+   */
+  tab: TabTerms | null;
+  /** Tops the gate tab up from the wallet. One at a time, however many agents ask. */
+  topUp(shortfall: TabShortfall): Promise<boolean>;
   stop(): Promise<void>;
 };
+
+/*
+  What a top-up adds when the shortfall is smaller. A tenth of a dollar covers
+  ten calls at the largest reserve, so a crew working steadily tops up every few
+  minutes rather than before every call — and leaves little at the gate if it
+  stops.
+*/
+const TOPUP_MINOR = 100_000n;
+
+/**
+ * The authority, as every place that builds one needs it built.
+ *
+ * Two call sites — boot and a funding rebuild — and the second once forgot the
+ * name guard it was given at boot. A tab origin is one more thing that has to
+ * match between them, so they share this rather than each spelling it out.
+ */
+const authorityFor = (wallet: OpenWallet, gate: string, tab: TabTerms | null): Promise<Authority> =>
+  createAuthority({
+    signer: wallet.signer,
+    secret: randomUUID(),
+    /*
+      Zero for a wallet that cannot pay yet, rather than a refusal to start.
+      An authority funded with nothing hands out nothing, which is the correct
+      behaviour for a crew with no money — and it lets the app come up and say
+      so instead of exiting before it serves a page.
+    */
+    fundedMinor: wallet.spendableMinor,
+    /*
+      Checked before every signature, which is what lets a name revoked on
+      chain stop an agent that is already running. Nodes that are not names
+      pass through untouched — the root is called `root` and always will be.
+    */
+    names: ensNameGuard({ suffix: '.eth' }),
+    /*
+      The root holds every permission this build defines, because it is the
+      ceiling agents are minted beneath rather than an actor in its own right.
+      Nothing runs as the root — an agent gets what its own grant names,
+      intersected with this.
+    */
+    scope: ALL_PERMISSIONS,
+    /*
+      The one gate this crew keeps a tab with. The authority both signs vouchers
+      for it and asks it what they cost, so it is named here from configuration
+      and never taken from an agent's request.
+    */
+    ...(tab ? { tabOrigins: [new URL(gate).origin] } : {}),
+  });
 
 export const publish = (runtime: Runtime): void => {
   save(runtime.crew);
@@ -186,33 +246,18 @@ const attach = async (runtime: Runtime, agent: Agent): Promise<Connection> => {
  * possible place to find out.
  */
 export const boot = async (options: { gate: string; network: string }): Promise<Runtime> => {
-  const wallet = await openWallet(options.network);
+  const wallet = await openWallet(options.network, options.gate);
   const crew = load();
 
-  const authority = await createAuthority({
-    signer: wallet.signer,
-    secret: randomUUID(),
-    /*
-      Zero for a wallet that cannot pay yet, rather than a refusal to start.
-      An authority funded with nothing hands out nothing, which is the correct
-      behaviour for a crew with no money — and it lets the app come up and say
-      so instead of exiting before it serves a page.
-    */
-    fundedMinor: wallet.spendableMinor,
-    /*
-      Checked before every signature, which is what lets a name revoked on
-      chain stop an agent that is already running. Nodes that are not names
-      pass through untouched — the root is called `root` and always will be.
-    */
-    names: ensNameGuard({ suffix: '.eth' }),
-    /*
-      The root holds every permission this build defines, because it is the
-      ceiling agents are minted beneath rather than an actor in its own right.
-      Nothing runs as the root — an agent gets what its own grant names,
-      intersected with this.
-    */
-    scope: ALL_PERMISSIONS,
-  });
+  /*
+    Asked once, at boot. A gate that keeps no tab — or cannot be reached right
+    now — leaves the crew paying per call, which still works; it is not a
+    reason to refuse to start.
+  */
+  const tab = await fetchTabTerms(options.gate, options.network).catch(() => null);
+  if (tab) emit({ type: 'log', text: `paying from a tab at ${new URL(options.gate).host}` });
+
+  const authority = await authorityFor(wallet, options.gate, tab);
 
   /*
     Whether names can be minted at all, asked once rather than assumed. The root
@@ -228,6 +273,22 @@ export const boot = async (options: { gate: string; network: string }): Promise<
     naming = false;
   }
 
+  /*
+    One top-up in flight, shared. Every agent on a crew hits an empty tab at
+    the same moment — they all spend from it — and each one topping up on its
+    own would move several times what anyone needed.
+  */
+  let topping: Promise<boolean> | null = null;
+
+  /*
+    Vouchers whose calls ended without a receipt — a stream cut off, a task
+    stopped — still hold budget until somebody asks the gate what they cost.
+    The agent that made them may never ask, so the runtime does.
+  */
+  const sweeper = setInterval(() => {
+    void runtime.authority.sweepVouchers().catch(() => undefined);
+  }, 60_000);
+
   const runtime: Runtime = {
     wallet,
     authority,
@@ -236,7 +297,47 @@ export const boot = async (options: { gate: string; network: string }): Promise<
     crew,
     naming,
     server: undefined as unknown as ServedAuthority,
+    tab,
+    topUp(shortfall) {
+      if (topping) return topping;
+      topping = (async () => {
+        const terms = runtime.tab;
+        if (!terms) return false;
+        const wanted = shortfall.reserveMinor - shortfall.balanceMinor;
+        const amount = wanted > TOPUP_MINOR ? wanted : TOPUP_MINOR;
+        try {
+          /*
+            Paid by the wallet itself, not through the authority. A top-up is
+            not any agent's spending — the money stays the crew's, only its
+            location changes — so it is charged to no node. What each agent
+            spends from the tab is charged to that agent, voucher by voucher.
+          */
+          const url = new URL('/v1/tab/topup', runtime.gate);
+          url.searchParams.set('amount', amount.toString());
+          const result = await payAndFetch(url.toString(), {
+            signer: runtime.wallet.signer,
+            network: terms.network,
+            maxAmount: amount,
+            init: { method: 'POST' },
+          });
+          if (!result.response.ok) {
+            const detail = await result.response.text().catch(() => '');
+            emit({ type: 'log', text: `could not top up the gate tab (${result.response.status}): ${detail.slice(0, 160)}` });
+            return false;
+          }
+          emit({ type: 'log', text: `topped up the gate tab by ${formatAmount(terms.network, amount)}` });
+          return true;
+        } catch (error) {
+          emit({ type: 'log', text: `could not top up the gate tab: ${(error as Error).message}` });
+          return false;
+        }
+      })().finally(() => {
+        topping = null;
+      });
+      return topping;
+    },
     async stop() {
+      clearInterval(sweeper);
       await runtime.server.close();
     },
   };
@@ -684,7 +785,7 @@ export const fire = async (runtime: Runtime, id: string): Promise<void> => {
 export const refreshFunding = async (runtime: Runtime, isBusy: () => boolean): Promise<boolean> => {
   let wallet: OpenWallet;
   try {
-    wallet = await openWallet(runtime.wallet.network);
+    wallet = await openWallet(runtime.wallet.network, runtime.gate);
   } catch {
     // An RPC that did not answer is not news about anyone's balance.
     return false;
@@ -701,13 +802,7 @@ export const refreshFunding = async (runtime: Runtime, isBusy: () => boolean): P
 
   if (wallet.spendableMinor > before && !isBusy()) {
     emit({ type: 'log', text: `wallet funded: ${formatAmount(wallet.network, wallet.spendableMinor)}` });
-    runtime.authority = await createAuthority({
-      signer: wallet.signer,
-      secret: randomUUID(),
-      fundedMinor: wallet.spendableMinor,
-      names: ensNameGuard({ suffix: '.eth' }),
-      scope: ALL_PERMISSIONS,
-    });
+    runtime.authority = await authorityFor(wallet, runtime.gate, runtime.tab);
     runtime.connections.clear();
 
     for (const agent of runtime.crew.agents) {

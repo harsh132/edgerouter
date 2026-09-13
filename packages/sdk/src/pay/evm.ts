@@ -34,6 +34,7 @@ import { ExactEvmScheme } from '@x402/evm';
 import { BatchEvmScheme, CompositeEvmScheme } from '@circle-fin/x402-batching/client';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { PaymentRequirements, PaymentSigner } from './types';
+import type { TypedDataSigner } from '../tab/voucher';
 
 /** CAIP-2 for the chains this has been exercised against. */
 export const POLYGON_AMOY = 'eip155:80002';
@@ -131,6 +132,12 @@ export const evmSigner = (params: {
   return {
     network,
     accountId: account.address,
+    /*
+      The same account, for typed data. viem's account signs EIP-712 with a
+      signature shape wider than the voucher needs, hence the cast; the key
+      still never leaves the account object.
+    */
+    voucherSigner: account as unknown as TypedDataSigner,
     async createPayload(x402Version: number, requirements: PaymentRequirements) {
       /*
         The EIP-712 domain comes from `extra`, and an absent one is not a

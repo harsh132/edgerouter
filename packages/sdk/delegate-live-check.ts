@@ -103,7 +103,7 @@ const ask = (n: number) =>
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek/deepseek-chat',
+        model: 'deepseek/deepseek-v4-flash',
         messages: [{ role: 'user', content: `Reply with only the number ${n}.` }],
       }),
     },

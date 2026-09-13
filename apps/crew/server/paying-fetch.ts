@@ -11,12 +11,81 @@
  * It is also why an agent cannot escape its budget by being clever: there is no
  * other way out of the process. It has no key, and this is its only network.
  */
-import { payAndFetch, AuthorityDenied, PaymentRefused, type PaymentSigner } from '../../../packages/sdk/src/index';
+import {
+  payAndFetch,
+  payFromTab,
+  AuthorityDenied,
+  PaymentRefused,
+  type Connection,
+  type PaymentSigner,
+  type TabReceipt,
+  type TabShortfall,
+  type TabTerms,
+} from '../../../packages/sdk/src/index';
 
 export type Spend = {
-  /** Smallest units this call cost. Zero for anything the gate served free. */
+  /**
+   * Smallest units this call cost. Zero for anything the gate served free.
+   *
+   * For a tab call this is the voucher's ceiling, which is what the authority
+   * reserved — provisional until the call settles.
+   */
   costMinor: bigint;
   ms: number;
+};
+
+/** What a tab call turned out to cost, once the gate has said. */
+export type Settled = { chargedMinor: bigint; releasedMinor: bigint };
+
+/** Paying from the gate's tab instead of per call. */
+export type TabRoute = {
+  terms: TabTerms;
+  /** Read per call, for the same reason the signer is: a raised budget re-mints it. */
+  connection: () => Connection;
+  topUp: (shortfall: TabShortfall) => Promise<boolean>;
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/*
+  When to ask the authority what a voucher cost, after the answer has been read.
+  The first attempt is immediate and nearly always enough: the gate writes the
+  receipt only after the charge is committed. The rest cover a stream that was
+  cut before its receipt, out to past the voucher's expiry and grace — when the
+  authority can decide it even if the gate never saw it.
+*/
+const SETTLE_SCHEDULE_MS = [0, 2_000, 10_000, 60_000, 5 * 60_000, 16 * 60_000];
+
+/**
+ * Settles a voucher in the background and corrects the ledger when it does.
+ *
+ * Waits for the receipt, then asks — never trusting the receipt itself. The
+ * authority asks the gate, and it is the authority's answer that moves budget.
+ */
+const settleLater = async (
+  connection: Connection,
+  nonce: string,
+  receipt: Promise<TabReceipt | null> | null,
+  correct: ((settled: Settled) => void) | void,
+): Promise<void> => {
+  if (receipt) await Promise.race([receipt, sleep(180_000)]);
+  for (const wait of SETTLE_SCHEDULE_MS) {
+    if (wait) await sleep(wait);
+    try {
+      const settled = await connection.settleVoucher(nonce);
+      if (settled.status === 'settled') {
+        correct?.({ chargedMinor: BigInt(settled.chargedMinor), releasedMinor: BigInt(settled.releasedMinor) });
+        return;
+      }
+    } catch (error) {
+      /*
+        The authority no longer knows this voucher — it was rebuilt, and the
+        tree the reservation lived in went with it. Nothing is left to correct
+        against, so there is nothing more to ask.
+      */
+      if (error instanceof AuthorityDenied) return;
+    }
+  }
 };
 
 export class BudgetExhausted extends Error {
@@ -51,7 +120,15 @@ export const payingFetch = (params: {
    * left" is simply being broke. Without this number they are the same refusal.
    */
   remainingMinor: () => bigint;
-  onSpend: (spend: Spend) => void;
+  /**
+   * Records a call's cost when it is made.
+   *
+   * May return a correction, called once a tab call's real price is known. A
+   * per-call payment never calls it — its price was final when it was paid.
+   */
+  onSpend: (spend: Spend) => ((settled: Settled) => void) | void;
+  /** Present when the gate keeps a tab. Absent means every call pays for itself. */
+  tab?: TabRoute;
   /**
    * Told when the authority refuses, because throwing is not enough.
    *
@@ -105,15 +182,67 @@ export const payingFetch = (params: {
         throw new Error('the gate can only be paid for requests with a string body');
       }
 
+      const requestInit = {
+        ...(init?.method ? { method: init.method } : {}),
+        ...(init?.headers ? { headers: init.headers as Record<string, string> } : {}),
+        ...(typeof body === 'string' ? { body } : {}),
+      };
+
+      if (params.tab) {
+        const route = params.tab;
+        const connection = route.connection();
+        const result = await payFromTab(url, {
+          terms: route.terms,
+          init: requestInit,
+          voucherFor: async (quote) => {
+            /*
+              The same sanity bound a per-call quote is held to, applied to the
+              ceiling — because the ceiling is what this call can cost. Thrown
+              as the refusal `payAndFetch` would have raised, so the branch
+              below treats a broke agent identically on either route.
+            */
+            const cap = params.maxAmountMinor();
+            if (quote.reserveMinor > cap) {
+              throw new PaymentRefused(
+                'over_max_amount',
+                `this call reserves ${quote.reserveMinor} but the cap for one call is ${cap}`,
+              );
+            }
+            return (await connection.voucher(quote)).voucher;
+          },
+          topUp: route.topUp,
+        });
+
+        const correct = params.onSpend({ costMinor: result.reservedMinor, ms: Date.now() - started });
+
+        if (result.response.status === 402) {
+          /*
+            The gate refused the voucher before reserving anything, so nothing
+            was charged — but the authority reserved it, and gets it back only
+            once the voucher can no longer be spent. The background settle
+            waits that out and corrects the ledger when it does.
+          */
+          void settleLater(connection, result.nonce, null, correct);
+          const detail = (await result.response
+            .clone()
+            .json()
+            .catch(() => null)) as { error?: { code?: string; detail?: string } } | null;
+          throw new BudgetExhausted(
+            detail?.error?.code === 'tab_insufficient'
+              ? 'the crew wallet has nothing left to top up the gate tab with'
+              : `the gate refused this call's voucher: ${detail?.error?.detail ?? detail?.error?.code ?? 'no reason given'}`,
+          );
+        }
+
+        void settleLater(connection, result.nonce, result.receipt, correct);
+        return result.response;
+      }
+
       const result = await payAndFetch(url, {
         signer: params.signer(),
         network: params.network,
         maxAmount: params.maxAmountMinor(),
-        init: {
-          ...(init?.method ? { method: init.method } : {}),
-          ...(init?.headers ? { headers: init.headers as Record<string, string> } : {}),
-          ...(typeof body === 'string' ? { body } : {}),
-        },
+        init: requestInit,
       });
 
       params.onSpend({
@@ -122,6 +251,16 @@ export const payingFetch = (params: {
       });
       return result.response;
     } catch (error) {
+      /*
+        Already translated — a tab call the gate refused. Reported and thrown
+        as it is; asking for more budget would not help, because the budget is
+        not what ran out.
+      */
+      if (error instanceof BudgetExhausted) {
+        params.onRefusal?.(error);
+        throw error;
+      }
+
       /*
         Translated rather than passed through. pi will retry a fetch that
         throws, and retrying a refusal from the authority is pointless — the

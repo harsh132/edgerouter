@@ -101,7 +101,7 @@ const ask = async (chat: typeof chatA, say: string) =>
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'openai/gpt-4o-mini',
+        model: 'deepseek/deepseek-v4-flash',
         messages: [{ role: 'user', content: `Reply with exactly: ${say}` }],
       }),
     },

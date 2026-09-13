@@ -43,12 +43,14 @@ import { permits, policyOf, type Caveat, type Policy } from '../../../core/src/c
 import {
   createTree,
   delegate,
+  release,
   revoke as revokeNode,
   spend,
   subtree,
   type Tree,
 } from '../../../core/src/tree';
 import type { PaymentRequirements, PaymentSigner } from '../pay/types';
+import { newNonce, signVoucher, type SignedVoucher, type TabQuote } from '../tab/voucher';
 import type { AuthorityRefusal } from './wire';
 
 /**
@@ -115,9 +117,34 @@ export type AuthorityOptions = {
    * one that existed before names did, and still works.
    */
   names?: NameGuard;
+  /**
+   * Gates this authority will spend a tab with, as origins.
+   *
+   * Two jobs, and the second is why this is a list rather than a flag. It
+   * bounds where vouchers can be spent, like `allowPayTo` bounds payments. And
+   * it is who the authority *asks* when settling a voucher — so an agent that
+   * reported a gate of its own choosing could otherwise have the authority
+   * believe that gate's account of what was charged, and release its whole
+   * reservation. Absent means no vouchers at all.
+   */
+  tabOrigins?: readonly string[];
+  /** How long a voucher stays spendable, in seconds. Short, because an unsettled voucher holds budget. */
+  voucherTtlSeconds?: number;
+  /** Injectable for tests. Used only to ask a gate about vouchers. */
+  fetch?: typeof fetch;
   /** Injectable for tests. */
   now?: () => number;
 };
+
+export type IssuedVoucher = {
+  voucher: SignedVoucher;
+  reservedMinor: bigint;
+  remainingMinor: bigint;
+};
+
+export type VoucherSettlement =
+  | { status: 'settled'; chargedMinor: bigint; releasedMinor: bigint; remainingMinor: bigint | null }
+  | { status: 'pending'; remainingMinor: bigint | null };
 
 export type Granted = {
   /** `er_<base64>` — ready to hand to a sub-agent. */
@@ -201,12 +228,83 @@ export type Authority = {
     requirements: PaymentRequirements;
     resourceUrl?: string;
   }): Promise<Authorized>;
+  /**
+   * Signs a voucher for one tab call and reserves its ceiling.
+   *
+   * Every check `authorize` makes, in the same order, against the ceiling —
+   * because the ceiling is what the voucher lets the gate take.
+   */
+  voucher(params: {
+    token: Token;
+    policy: Policy;
+    quote: TabQuote;
+    resourceUrl: string;
+  }): Promise<IssuedVoucher>;
+  /**
+   * Returns the unused part of a voucher's reservation, once the gate says
+   * what the call cost.
+   *
+   * `pending` when the gate cannot yet say — the call is still streaming, or
+   * the voucher was never presented and could still be. Asking again later is
+   * always safe: a voucher is released at most once.
+   */
+  settleVoucher(params: { token: Token; nonce: string }): Promise<VoucherSettlement>;
+  /** Settles every voucher that can be decided now. Returns how many were. */
+  sweepVouchers(): Promise<number>;
   revoke(params: { token: Token; node: string }): { recoveredMinor: bigint };
   /** The caller's own node and everything beneath it. */
   balances(node: string): readonly NodeBalance[];
-  /** Total ever spent through this authority. Only grows. */
+  /**
+   * Total spent through this authority.
+   *
+   * Grows with every payment and every voucher, and falls only when a voucher
+   * settles below its ceiling — which is the difference coming back, not a
+   * payment being undone.
+   */
   spentMinor(): bigint;
 };
+
+/**
+ * One voucher's reservation, kept until its charge is known.
+ *
+ * `lineage` is the node and its ancestors as they were when the voucher was
+ * signed. A node can be revoked while its call is still streaming, and its
+ * reservation then has nowhere to return to; it goes to the nearest ancestor
+ * still standing, which is where revocation sent the node's balance too.
+ */
+type Reservation = {
+  nonce: string;
+  lineage: readonly string[];
+  reservedMinor: bigint;
+  origin: string;
+  network: string;
+  payer: string;
+  /** Unix ms, as the voucher states it. */
+  expiresAt: number;
+  settled: { chargedMinor: bigint; releasedMinor: bigint; at: number } | null;
+};
+
+/*
+  How long past its expiry a voucher is still given the benefit of the doubt.
+  A gate accepts a voucher up to its expiry and may still be streaming the
+  answer after it; settling the moment it expires could decide "never charged"
+  about a call that is about to be.
+*/
+const SETTLE_GRACE_MS = 5 * 60 * 1000;
+/** Settled reservations are kept this long, so a late settle call still gets its answer. */
+const SETTLED_RETENTION_MS = 60 * 60 * 1000;
+
+const refusalFor = (decision: { rule: string; detail: string }): AuthorityRefused =>
+  new AuthorityRefused(
+    decision.rule === 'expires'
+      ? 'expired'
+      : decision.rule === 'ceiling'
+        ? 'over_ceiling'
+        : decision.rule === 'host'
+          ? 'host_not_permitted'
+          : 'unbounded_capability',
+    decision.detail,
+  );
 
 export const createAuthority = async (options: AuthorityOptions): Promise<Authority> => {
   const root = options.root ?? DEFAULT_ROOT;
@@ -216,6 +314,87 @@ export const createAuthority = async (options: AuthorityOptions): Promise<Author
 
   let tree: Tree = createTree(ROOT_NODE, options.fundedMinor);
   let spent = 0n;
+  const reservations = new Map<string, Reservation>();
+  /*
+    One settlement in flight per voucher. Two callers settling the same nonce
+    would otherwise both ask the gate, both hear "charged", and both release —
+    returning the unused part twice. Sharing the promise makes the second
+    caller wait for the first one's answer instead.
+  */
+  const settling = new Map<string, Promise<boolean>>();
+  const doFetch = options.fetch ?? fetch;
+  const voucherTtlMs = (options.voucherTtlSeconds ?? 600) * 1000;
+
+  const lineageOf = (node: string): string[] => {
+    const out: string[] = [];
+    let current = tree.nodes.get(node);
+    while (current) {
+      out.push(current.id);
+      current = current.parent === null ? undefined : tree.nodes.get(current.parent);
+    }
+    return out;
+  };
+
+  /**
+   * Decides one reservation from what the gate reports. True when decided.
+   *
+   * Four outcomes, and only one of them releases on the gate's word alone:
+   *
+   *   charged             the charge stands, capped at the reservation
+   *   unknown, expired    never presented and no longer presentable: nothing
+   *   reserved, expired   presented and never settled: the whole ceiling,
+   *                       which is what the gate kept
+   *   anything else       undecided — ask again later
+   *
+   * An unreachable gate decides nothing. Holding budget a little longer is the
+   * cost; guessing would be releasing money on the strength of a timeout.
+   */
+  const decide = async (reservation: Reservation): Promise<boolean> => {
+    if (reservation.settled) return true;
+
+    let state: { status?: unknown; chargedMinor?: unknown };
+    try {
+      const url =
+        `${reservation.origin}/v1/tab/vouchers/${reservation.nonce}` +
+        `?payer=${reservation.payer}&network=${encodeURIComponent(reservation.network)}`;
+      const response = await doFetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) return false;
+      state = (await response.json()) as typeof state;
+    } catch {
+      return false;
+    }
+
+    const expired = now() > reservation.expiresAt + SETTLE_GRACE_MS;
+    let charged: bigint | null = null;
+    if (state.status === 'charged' && typeof state.chargedMinor === 'string' && /^\d+$/.test(state.chargedMinor)) {
+      const reported = BigInt(state.chargedMinor);
+      charged = reported > reservation.reservedMinor ? reservation.reservedMinor : reported;
+    } else if (state.status === 'unknown' && expired) {
+      charged = 0n;
+    } else if (state.status === 'reserved' && expired) {
+      charged = reservation.reservedMinor;
+    }
+    if (charged === null) return false;
+
+    const back = reservation.reservedMinor - charged;
+    if (back > 0n) {
+      const home = reservation.lineage.find((id) => tree.nodes.has(id)) ?? ROOT_NODE;
+      const returned = release(tree, { node: home, amountMinor: back });
+      if (!returned.ok) return false;
+      tree = returned.value;
+      spent -= back;
+    }
+    reservation.settled = { chargedMinor: charged, releasedMinor: back, at: now() };
+    return true;
+  };
+
+  const decideOnce = (reservation: Reservation): Promise<boolean> => {
+    const inFlight = settling.get(reservation.nonce);
+    if (inFlight) return inFlight;
+    const attempt = decide(reservation).finally(() => settling.delete(reservation.nonce));
+    settling.set(reservation.nonce, attempt);
+    return attempt;
+  };
 
   /*
     The root capability carries an expiry, and that is not ceremony: `permits`
@@ -449,17 +628,7 @@ export const createAuthority = async (options: AuthorityOptions): Promise<Author
       }
 
       const decision = permits(params.policy, { amountMinor: amount, host, now: now() });
-      if (!decision.ok) {
-        const code: AuthorityRefusal =
-          decision.rule === 'expires'
-            ? 'expired'
-            : decision.rule === 'ceiling'
-              ? 'over_ceiling'
-              : decision.rule === 'host'
-                ? 'host_not_permitted'
-                : 'unbounded_capability';
-        throw new AuthorityRefused(code, decision.detail);
-      }
+      if (!decision.ok) throw refusalFor(decision);
 
       if (node.balanceMinor < amount) {
         throw new AuthorityRefused(
@@ -509,6 +678,153 @@ export const createAuthority = async (options: AuthorityOptions): Promise<Author
         amountMinor: amount,
         remainingMinor: tree.nodes.get(node.id)!.balanceMinor,
       };
+    },
+
+    async voucher(params) {
+      const node = tree.nodes.get(params.token.node);
+      if (!node) {
+        throw new AuthorityRefused('unknown_node', `no budget node named ${params.token.node}`);
+      }
+
+      const typed = options.signer.voucherSigner;
+      if (!typed || !options.tabOrigins || options.tabOrigins.length === 0) {
+        throw new AuthorityRefused('tabs_disabled', 'this authority does not pay from a tab');
+      }
+      if (params.quote.network !== options.signer.network) {
+        throw new AuthorityRefused(
+          'wrong_network',
+          `this authority pays on ${options.signer.network}, not ${params.quote.network}`,
+        );
+      }
+      const chainMatch = /^eip155:(\d+)$/.exec(params.quote.network);
+      if (!chainMatch) {
+        throw new AuthorityRefused('wrong_network', `tabs are EVM-only; ${params.quote.network} is not`);
+      }
+
+      let resource: URL;
+      try {
+        resource = new URL(params.resourceUrl);
+      } catch {
+        throw new AuthorityRefused('bad_request', 'resourceUrl is not a URL');
+      }
+      if (!options.tabOrigins.includes(resource.origin)) {
+        throw new AuthorityRefused(
+          'tab_origin_not_permitted',
+          `this authority does not keep a tab with ${resource.origin}`,
+        );
+      }
+      if (options.allowPayTo && !options.allowPayTo.includes(params.quote.payTo)) {
+        throw new AuthorityRefused('pay_to_not_permitted', `this authority does not pay ${params.quote.payTo}`);
+      }
+      if (!/^0x[0-9a-fA-F]{40}$/.test(params.quote.payTo)) {
+        throw new AuthorityRefused('bad_request', 'quote.payTo must be a 0x address');
+      }
+
+      const amount = params.quote.reserveMinor;
+      if (amount <= 0n) throw new AuthorityRefused('bad_request', 'quote.reserveMinor must be positive');
+
+      const decision = permits(params.policy, { amountMinor: amount, host: resource.host, now: now() });
+      if (!decision.ok) throw refusalFor(decision);
+
+      if (node.balanceMinor < amount) {
+        throw new AuthorityRefused(
+          'budget_exhausted',
+          `${node.id} holds ${node.balanceMinor} but this call reserves ${amount}`,
+        );
+      }
+
+      if (options.names) {
+        const problem = await options.names.check(node.id);
+        if (problem) throw new AuthorityRefused('name_not_resolving', problem);
+      }
+
+      const nonce = newNonce();
+      // Whole seconds, because that is what the voucher signs; kept in ms here.
+      const expiresAt = Math.floor((now() + voucherTtlMs) / 1000) * 1000;
+
+      let signed: SignedVoucher;
+      try {
+        signed = await signVoucher(typed, {
+          chainId: Number(chainMatch[1]),
+          voucher: {
+            payee: params.quote.payTo as `0x${string}`,
+            nonce,
+            maxAmount: amount.toString(),
+            expiresAt: expiresAt / 1000,
+            node: node.id,
+          },
+        });
+      } catch (error) {
+        throw new AuthorityRefused('signing_failed', (error as Error).message);
+      }
+
+      /*
+        Reserved once the signature exists, as a payment is charged once its
+        signature exists. The whole ceiling, because until the gate says
+        otherwise that is what the voucher can cost.
+      */
+      const charged = spend(tree, { node: node.id, amountMinor: amount });
+      if (!charged.ok) {
+        throw new AuthorityRefused('budget_exhausted', 'the balance moved under this voucher');
+      }
+      tree = charged.value;
+      spent += amount;
+
+      reservations.set(nonce, {
+        nonce,
+        lineage: lineageOf(node.id),
+        reservedMinor: amount,
+        origin: resource.origin,
+        network: params.quote.network,
+        payer: typed.address.toLowerCase(),
+        expiresAt,
+        settled: null,
+      });
+
+      return {
+        voucher: signed,
+        reservedMinor: amount,
+        remainingMinor: tree.nodes.get(node.id)!.balanceMinor,
+      };
+    },
+
+    async settleVoucher(params) {
+      const reservation = reservations.get(params.nonce.toLowerCase());
+      if (!reservation) {
+        throw new AuthorityRefused('unknown_voucher', 'this authority issued no such voucher');
+      }
+      /*
+        Only the node that asked for the voucher, or one above it. Settling
+        cannot move money anywhere the gate's answer does not send it, so this
+        is not what keeps the budget honest — it keeps one agent from reading
+        another's spending.
+      */
+      if (!reservation.lineage.includes(params.token.node)) {
+        throw new AuthorityRefused('not_a_descendant', 'that voucher belongs to another node');
+      }
+
+      await decideOnce(reservation);
+      const remainingMinor = tree.nodes.get(params.token.node)?.balanceMinor ?? null;
+      return reservation.settled
+        ? {
+            status: 'settled',
+            chargedMinor: reservation.settled.chargedMinor,
+            releasedMinor: reservation.settled.releasedMinor,
+            remainingMinor,
+          }
+        : { status: 'pending', remainingMinor };
+    },
+
+    async sweepVouchers() {
+      let decided = 0;
+      for (const reservation of [...reservations.values()]) {
+        if (reservation.settled) {
+          if (now() - reservation.settled.at > SETTLED_RETENTION_MS) reservations.delete(reservation.nonce);
+          continue;
+        }
+        if (await decideOnce(reservation)) decided += 1;
+      }
+      return decided;
     },
 
     /**

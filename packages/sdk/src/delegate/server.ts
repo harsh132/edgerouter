@@ -26,6 +26,10 @@ import type {
   RevokeResponse,
   SignRequest,
   SignResponse,
+  VoucherRequest,
+  VoucherResponse,
+  VoucherSettleRequest,
+  VoucherSettleResponse,
 } from './wire';
 import type { PaymentRequirements } from '../pay/types';
 
@@ -159,6 +163,52 @@ export const authorityHandler = (authority: Authority) => {
           payload: authorized.payload,
           remainingMinor: authorized.remainingMinor.toString(),
         };
+        return json(reply);
+      }
+
+      if (url.pathname === '/voucher' && request.method === 'POST') {
+        const raw = (await body(request)) as unknown as VoucherRequest;
+        const quote = raw.quote as Record<string, unknown> | undefined;
+        if (!quote || typeof quote.network !== 'string' || typeof quote.payTo !== 'string') {
+          throw new AuthorityRefused('bad_request', 'quote must carry network and payTo');
+        }
+        if (typeof raw.resourceUrl !== 'string') {
+          throw new AuthorityRefused('bad_request', 'resourceUrl is required for a voucher');
+        }
+        const issued = await authority.voucher({
+          token,
+          policy,
+          quote: {
+            network: quote.network,
+            payTo: quote.payTo,
+            reserveMinor: parseMinor(quote.reserveMinor, 'quote.reserveMinor'),
+          },
+          resourceUrl: raw.resourceUrl,
+        });
+        const reply: VoucherResponse = {
+          voucher: issued.voucher,
+          reservedMinor: issued.reservedMinor.toString(),
+          remainingMinor: issued.remainingMinor.toString(),
+        };
+        return json(reply);
+      }
+
+      if (url.pathname === '/voucher/settle' && request.method === 'POST') {
+        const raw = (await body(request)) as unknown as VoucherSettleRequest;
+        if (typeof raw.nonce !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(raw.nonce)) {
+          throw new AuthorityRefused('bad_request', 'nonce must be 32 bytes of hex');
+        }
+        const result = await authority.settleVoucher({ token, nonce: raw.nonce });
+        const remainingMinor = result.remainingMinor === null ? null : result.remainingMinor.toString();
+        const reply: VoucherSettleResponse =
+          result.status === 'settled'
+            ? {
+                status: 'settled',
+                chargedMinor: result.chargedMinor.toString(),
+                releasedMinor: result.releasedMinor.toString(),
+                remainingMinor,
+              }
+            : { status: 'pending', remainingMinor };
         return json(reply);
       }
 

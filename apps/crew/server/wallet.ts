@@ -40,6 +40,8 @@ export type OpenWallet = {
   network: string;
   /** Present only when it differs from spendable, and only then worth saying. */
   heldMinor?: bigint;
+  /** Prepaid at the gate. Already included in `spendableMinor`; broken out so it can be shown. */
+  tabMinor?: bigint;
   /**
    * Absent when the wallet can pay.
    *
@@ -52,7 +54,30 @@ export type OpenWallet = {
   shortfall?: Shortfall;
 };
 
-export const openWallet = async (network: string): Promise<OpenWallet> => {
+/**
+ * What this wallet has prepaid at the gate, in its tab.
+ *
+ * Counted as spendable because it is: topping a tab up moves money from the
+ * Gateway balance to the gate without it leaving the crew, and a wallet that
+ * forgot the tab would read every top-up as money lost — refusing to hire
+ * against funds the agents can still spend. An unreachable gate reads as zero,
+ * which understates rather than invents.
+ */
+const tabBalance = async (gate: string, network: string, address: string): Promise<bigint> => {
+  try {
+    const url = new URL('/v1/tab', gate);
+    url.searchParams.set('payer', address);
+    url.searchParams.set('network', network);
+    const response = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) return 0n;
+    const body = (await response.json()) as { balanceMinor?: unknown };
+    return typeof body.balanceMinor === 'string' && /^\d+$/.test(body.balanceMinor) ? BigInt(body.balanceMinor) : 0n;
+  } catch {
+    return 0n;
+  }
+};
+
+export const openWallet = async (network: string, gate?: string): Promise<OpenWallet> => {
   if (network.startsWith('hedera:')) {
     const { wallet } = loadOrCreateWallet({ network });
     const funding = await wallet.refresh();
@@ -85,6 +110,33 @@ export const openWallet = async (network: string): Promise<OpenWallet> => {
 
   if (isGatewayNetwork(network)) {
     const funding = await gatewayFunding({ privateKey, network, address: wallet.address });
+    const tabMinor = gate ? await tabBalance(gate, network, wallet.address) : 0n;
+
+    /*
+      A tab with money in it can pay even when the Gateway balance cannot — the
+      last top-up may have moved everything there. Only a wallet with neither
+      is short of anything.
+    */
+    if (!funding.canPay && tabMinor > 0n) {
+      return {
+        signer,
+        account: wallet.address,
+        spendableMinor: tabMinor,
+        heldMinor: funding.walletMinor,
+        tabMinor,
+        network,
+      };
+    }
+    if (funding.canPay) {
+      return {
+        signer,
+        account: wallet.address,
+        spendableMinor: funding.availableMinor + tabMinor,
+        heldMinor: funding.walletMinor,
+        ...(tabMinor > 0n ? { tabMinor } : {}),
+        network,
+      };
+    }
     if (!funding.canPay) {
       /*
         Named precisely, because the two failures look identical from the UI

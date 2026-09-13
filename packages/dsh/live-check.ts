@@ -67,7 +67,7 @@ const message = (text: string): Message =>
 
 const request = {
   provider: 'edgerouter',
-  model: 'deepseek/deepseek-chat',
+  model: 'deepseek/deepseek-v4-flash',
   system: 'Answer in one short sentence.',
   messages: [message('What is a 402 status code for?')],
 } as unknown as GenerateOptions;

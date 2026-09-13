@@ -79,7 +79,7 @@ export const App = () => {
         url: GATE,
         network: ARC,
         body: {
-          model: 'openai/gpt-4o-mini',
+          model: 'deepseek/deepseek-v4-flash',
           messages: [{ role: 'user', content: prompt }],
         },
         /*

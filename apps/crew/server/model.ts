@@ -12,11 +12,17 @@
  */
 import type { Model } from '@earendil-works/pi-ai';
 
-/** The only field an agent picks. The rest describes the gate, not the model. */
+/**
+ * The only field an agent picks. The rest describes the gate, not the model.
+ *
+ * The gate's own list, kept in step with `apps/gate/src/pricing.ts` — three
+ * cheap models that call tools well, because every call is paid in testnet
+ * USDC. The first is the default for anything hired before the list changed.
+ */
 export const MODELS = [
-  'openai/gpt-4o-mini',
-  'deepseek/deepseek-chat',
-  'anthropic/claude-3.5-haiku',
+  'deepseek/deepseek-v4-flash',
+  'openai/gpt-oss-120b',
+  'qwen/qwen3.7-flash',
 ] as const;
 
 export const modelFor = (gate: string, id: string): Model<'openai-completions'> => ({

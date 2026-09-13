@@ -25,7 +25,10 @@ import type {
   MintResponse,
   RevokeResponse,
   SignResponse,
+  VoucherResponse,
+  VoucherSettleResponse,
 } from './wire';
+import type { SignedVoucher, TabQuote } from '../tab/voucher';
 
 export type ConnectOptions = {
   /** Where the authority listens. Loopback, in every intended deployment. */
@@ -84,6 +87,15 @@ export type Connection = {
   /** Take it all back, including everything below it. */
   revoke(node: string): Promise<RevokeResponse>;
   balances(): Promise<BalancesResponse>;
+  /**
+   * A voucher for one tab call, reserved against this agent's budget.
+   *
+   * Uses the `resourceUrl` this connection was opened with, which must be a
+   * gate the authority keeps a tab with.
+   */
+  voucher(quote: TabQuote): Promise<{ voucher: SignedVoucher; reservedMinor: bigint; remainingMinor: bigint }>;
+  /** Asks the authority to find out what a voucher cost and return the rest. */
+  settleVoucher(nonce: string): Promise<VoucherSettleResponse>;
 };
 
 const call = async <T>(
@@ -212,5 +224,30 @@ export const connectAuthority = async (options: ConnectOptions): Promise<Connect
       call<RevokeResponse>(transport, '/revoke', { method: 'POST', body: { node } }),
 
     balances: () => call<BalancesResponse>(transport, '/balances'),
+
+    voucher: async (quote) => {
+      const issued = await call<VoucherResponse>(transport, '/voucher', {
+        method: 'POST',
+        body: {
+          quote: { network: quote.network, payTo: quote.payTo, reserveMinor: quote.reserveMinor.toString() },
+          resourceUrl: options.resourceUrl ?? '',
+        },
+      });
+      remaining = BigInt(issued.remainingMinor);
+      return {
+        voucher: issued.voucher,
+        reservedMinor: BigInt(issued.reservedMinor),
+        remainingMinor: remaining,
+      };
+    },
+
+    settleVoucher: async (nonce) => {
+      const settled = await call<VoucherSettleResponse>(transport, '/voucher/settle', {
+        method: 'POST',
+        body: { nonce },
+      });
+      if (settled.remainingMinor !== null) remaining = BigInt(settled.remainingMinor);
+      return settled;
+    },
   };
 };

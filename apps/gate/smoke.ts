@@ -51,7 +51,7 @@ const modelBody: Json = await models.json();
 check(models.status === 200, 'GET /v1/models is free');
 check(Array.isArray(modelBody.data) && modelBody.data.length > 0, 'models are listed with prices');
 
-const chat = { model: 'deepseek/deepseek-chat', messages: [{ role: 'user', content: 'hi' }] };
+const chat = { model: 'deepseek/deepseek-v4-flash', messages: [{ role: 'user', content: 'hi' }] };
 
 /*
   The two halves of the access model, and the reason they differ.

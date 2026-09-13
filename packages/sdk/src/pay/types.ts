@@ -7,6 +7,8 @@
  * differ from what you might expect from v1, the reason is noted.
  */
 
+import type { TypedDataSigner } from '../tab/voucher';
+
 /** One payment option out of the 402's `accepts` list. */
 export type PaymentRequirements = {
   scheme: string;
@@ -65,6 +67,16 @@ export type PaymentSigner = {
     x402Version: number,
     requirements: PaymentRequirements,
   ): Promise<Record<string, unknown>>;
+  /**
+   * Signs tab vouchers, when this signer can.
+   *
+   * Present only on a signer that holds an EVM key locally. A voucher is typed
+   * data rather than a payment, so it cannot be produced through
+   * `createPayload`; and a delegated signer never has one, because a voucher
+   * spends the whole wallet's tab and asking for one goes through the
+   * authority's own route, where the per-agent budget is enforced.
+   */
+  readonly voucherSigner?: TypedDataSigner;
 };
 
 /** Why a payment was not attempted. Each value names one refusal. */

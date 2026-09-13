@@ -68,7 +68,7 @@ if (before === 0n) die(`${signer.accountId} has no HBAR — fund it from the tes
 console.log(`  balance   ${formatHbar(before)}\n`);
 
 const body = JSON.stringify({
-  model: 'deepseek/deepseek-chat',
+  model: 'deepseek/deepseek-v4-flash',
   messages: [{ role: 'user', content: 'Reply with the single word: paid.' }],
 });
 

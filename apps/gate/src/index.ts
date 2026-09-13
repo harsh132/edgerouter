@@ -112,6 +112,21 @@ export default {
       // Free: a price list nobody should have to pay to read.
       return json({
         object: 'list',
+        /*
+          Where a tab can be kept, and whom a voucher pays. A voucher signs the
+          gate's `payTo` so it cannot be spent at another gate, which means a
+          client has to learn it before its first call rather than from a 402
+          it would never receive.
+        */
+        tabs: env.TAB
+          ? [...parseNetworks(env.NETWORKS).values()]
+              .filter((network) => network.kind === 'gateway')
+              .map((network) => ({
+                network: network.id,
+                payTo: network.payTo,
+                unitsPerUsdMinor: network.unitsPerUsdMinor.toString(),
+              }))
+          : [],
         data: MODELS.map((model) => ({
           id: model.id,
           object: 'model',

@@ -87,6 +87,19 @@ export type SignedVoucher = {
   signature: Hex;
 };
 
+/**
+ * What a voucher is being asked for: the gate's terms for one call.
+ *
+ * `reserveMinor` is in the asset's smallest unit — the gate's per-model reserve
+ * already scaled by the network's units — because that is the number the
+ * voucher signs and the number the authority reserves against a budget.
+ */
+export type TabQuote = {
+  network: string;
+  payTo: string;
+  reserveMinor: bigint;
+};
+
 /** What the gate says a voucher cost. */
 export type TabReceipt = {
   nonce: Hex;
