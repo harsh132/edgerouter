@@ -43,10 +43,19 @@ const running = new Map<string, PiAgent>();
  * on one mispriced call is worse than refusing it. The authority enforces the
  * real limit; this is a sanity bound on top.
  */
-const perCallCeiling = (agent: Agent): bigint => {
+const perCallCeiling = (agent: Agent, reserveMinor?: bigint): bigint => {
   const remaining = BigInt(agent.budgetMinor) - BigInt(agent.spentMinor);
   const tenth = BigInt(agent.budgetMinor) / 10n;
-  return tenth > 0n && tenth < remaining ? tenth : remaining;
+  /*
+    Raised to the tab reserve when there is one. A reserve is not a quote that
+    might be mispriced — it is the gate's published worst case, the call is
+    charged what it actually used, and the unused part comes back. Holding it
+    to a tenth of the budget meant any agent hired with less than ten reserves
+    could not make a single call, while a call's real cost was a hundredth of
+    the cap that refused it.
+  */
+  const floor = reserveMinor !== undefined && reserveMinor > tenth ? reserveMinor : tenth;
+  return floor > 0n && floor < remaining ? floor : remaining;
 };
 
 export const stop = (agentId: string): boolean => {
@@ -125,7 +134,7 @@ export const runTask = async (runtime: Runtime, agent: Agent, prompt: string): P
     */
     signer: () => runtime.connections.get(agent.id)?.signer ?? connection.signer,
     network: agent.network,
-    maxAmountMinor: () => perCallCeiling(agent),
+    maxAmountMinor: () => perCallCeiling(agent, runtime.tab?.reserves.get(agent.model)),
     remainingMinor: () => BigInt(agent.budgetMinor) - BigInt(agent.spentMinor),
     onSpend: ({ costMinor, ms }) => {
       agent.spentMinor = (BigInt(agent.spentMinor) + costMinor).toString();
